@@ -1,0 +1,3 @@
+[submodule "extern/CppDependencies"]
+	path = extern/CppDependencies
+	url = https://github.com/Iso83/CppDependencies.git

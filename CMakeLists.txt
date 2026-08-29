@@ -1,0 +1,61 @@
+cmake_minimum_required(VERSION 4.0)
+
+project(Didrachma
+    VERSION 0.1.0
+    LANGUAGES C CXX
+)
+
+# =========================================================
+# Project configuration
+# =========================================================
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+# =========================================================
+# CppCMake
+# =========================================================
+
+include(cmake/Dependencies.cmake)
+
+dependencies_fetch_cppcmake()
+
+cppcmake_project_initialize()
+
+if(CPPCMAKE_PROJECT_ALREADY_REGISTERED)
+    return()
+endif()
+
+cppcmake_githook_precommit()
+cppcmake_version_generate()
+cppcmake_test_setup()
+
+# =========================================================
+# Dependencies
+# =========================================================
+
+cppcmake_dependency_try_local_packages()
+
+cppcmake_gitsubmodule_init_missing_targets(
+    WORKING_DIRECTORY
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+
+    PATH
+        "extern/CppDependencies"
+)
+
+include("extern/CppDependencies/CppDependencies.cmake")
+
+cppdependencies_glad(GLAD)
+cppdependencies_glfw(GLFW)
+cppdependencies_glm(GLM)
+cppdependencies_imgui_docking(IMGUI)
+
+# =========================================================
+# Modules
+# =========================================================
+
+cppcmake_module_add(apps/chart)
