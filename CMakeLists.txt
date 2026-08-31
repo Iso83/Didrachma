@@ -53,9 +53,17 @@ cppdependencies_glad(GLAD)
 cppdependencies_glfw(GLFW)
 cppdependencies_glm(GLM)
 cppdependencies_imgui_docking(IMGUI)
+cppdependencies_implot(IMPLOT ${IMGUI})
+cppdependencies_curl(CURL)
+cppdependencies_json_nlohmann(JSON)
+cppdependencies_cli11(CLI11)
+cppdependencies_talib(TALIB)
 
 # =========================================================
 # Modules
 # =========================================================
+
+cppcmake_module_add(market/core)
+cppcmake_module_add(market/yahooFinance)
 
 cppcmake_module_add(apps/chart)
