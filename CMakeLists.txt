@@ -54,16 +54,23 @@ cppdependencies_glfw(GLFW)
 cppdependencies_glm(GLM)
 cppdependencies_imgui_docking(IMGUI)
 cppdependencies_implot(IMPLOT ${IMGUI})
-cppdependencies_curl(CURL)
+cppdependencies_curl(CURL SHARED)
 cppdependencies_json_nlohmann(JSON)
 cppdependencies_cli11(CLI11)
-cppdependencies_talib(TALIB)
+cppdependencies_talib(TALIB SHARED)
 
 # =========================================================
 # Modules
 # =========================================================
 
 cppcmake_module_add(market/core)
-cppcmake_module_add(market/yahooFinance)
+cppcmake_module_add(market/providers/yahoo)
+
+cppcmake_module_add(analysis/core)
+cppcmake_module_add(analysis/adapters/talib)
+
+if(${PROJECT_NAME}_BUILD_TESTS)
+    cppcmake_module_add(tests/common)
+endif()
 
 cppcmake_module_add(apps/chart)

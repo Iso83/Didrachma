@@ -18,15 +18,17 @@ file(GLOB_RECURSE MODULE_PUBLIC_HEADERS CONFIGURE_DEPENDS
 # Target
 # ============================================================================
 
-string(REPLACE "/" "_" MODULE_NAME "apps/chart")
+string(REPLACE "/" "_" MODULE_NAME "analysis/adapters/talib")
 
 set(MODULE_TARGET "${PROJECT_NAME}_${MODULE_NAME}")
 
-add_executable(${MODULE_TARGET}
+add_library(${MODULE_TARGET}
     ${MODULE_SRC}
     ${MODULE_PRIVATE_HEADERS}
     ${MODULE_PUBLIC_HEADERS}
 )
+
+add_library(${PROJECT_NAME}::${MODULE_NAME} ALIAS ${MODULE_TARGET})
 
 # ============================================================================
 # Build configuration
@@ -47,16 +49,14 @@ target_compile_features(${MODULE_TARGET}
         cxx_std_20
 )
 
-#set_target_properties(${MODULE_TARGET} PROPERTIES WIN32_EXECUTABLE TRUE)
-
 # ============================================================================
 # IDE organization
 # ============================================================================
 
-cppcmake_project_set_ide_folder(${MODULE_TARGET} "apps/chart")
+cppcmake_project_set_ide_folder(${MODULE_TARGET} "analysis/adapters/talib")
 
 source_group(
-    TREE "${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME}/apps/chart"
+    TREE "${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME}/analysis/adapters/talib"
     PREFIX "Include"
     FILES
         ${MODULE_PUBLIC_HEADERS}
@@ -75,40 +75,25 @@ source_group(
 # ============================================================================
 
 target_link_libraries(${MODULE_TARGET}
+    PUBLIC
+        ${PROJECT_NAME}_analysis_core
     PRIVATE
-        ${PROJECT_NAME}_market_providers_yahoo
-        glad
-        ${IMPLOT}
-        ${CLI11}
+        ${TALIB}
 )
-
-cppcmake_dependency_copy_runtime(${MODULE_TARGET})
 
 # ============================================================================
 # Tests
 # ============================================================================
 
-add_library(${MODULE_TARGET}_test_empty INTERFACE)
-
-target_link_libraries(${MODULE_TARGET}_test_empty
-    INTERFACE
-        glad
-)
-
 cppcmake_test_add(
     NAME
-        Test_${MODULE_TARGET}_TickerData
+        Test_${MODULE_TARGET}_Analyzer
     TARGET
-        ${MODULE_TARGET}_test_empty
+        ${MODULE_TARGET}
     MODULE
-        "apps/chart"
+        "analysis/adapters/talib"
     SOURCES
-        tests/TickerData.cpp
-        src/data/TickerData.cpp
+        tests/Analyzer.cpp
     LINK_LIBRARIES
-        ${PROJECT_NAME}_market_providers_yahoo
-        glad
-        ${IMPLOT}
-    INCLUDE_DIRECTORIES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${TALIB}
 )

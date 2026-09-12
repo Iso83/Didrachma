@@ -1,0 +1,21 @@
+{
+    "chart": {
+        "result": [
+            {
+                "timestamp": [ 1704067200, 1704153600, 1704240000 ],
+                "indicators": {
+                    "quote": [
+                        {
+                            "open": [ 100.0, null, 102.0 ],
+                            "high": [ 110.0, null, 112.0 ],
+                            "low": [ 90.0, null, 92.0 ],
+                            "close": [ 105.0, null, 107.0 ],
+                            "volume": [ 1000, null, 1200 ]
+                        }
+                    ]
+                }
+            }
+        ],
+        "error": null
+    }
+}

@@ -1,3 +1,9 @@
 [submodule "extern/CppDependencies"]
 	path = extern/CppDependencies
 	url = https://github.com/Iso83/CppDependencies.git
+[submodule "extern/ScopeCanvas.Editor"]
+	path = extern/ScopeCanvas.Editor
+	url = https://github.com/Iso83/ScopeCanvas.Editor.git
+[submodule "extern/ScopeCanvas"]
+	path = extern/ScopeCanvas
+	url = https://github.com/Iso83/ScopeCanvas.git

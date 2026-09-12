@@ -71,27 +71,35 @@ source_group(
 )
 
 # ============================================================================
-# Dependencies
-# ============================================================================
-
-target_link_libraries(${MODULE_TARGET}
-    PRIVATE
-        ${IMPLOT}
-)
-
-# ============================================================================
 # Tests
 # ============================================================================
 
-#[[cppcmake_test_add(
+cppcmake_test_add(
     NAME
-        Test_${MODULE_TARGET}
+        Test_${MODULE_TARGET}_Queue
     TARGET
         ${MODULE_TARGET}
     MODULE
-        "market/core"
+        "market/core/provider"
     SOURCES
-        tests/Test_Core.cpp
+        tests/provider/Queue.cpp
+    LINK_LIBRARIES
+        ${PROJECT_NAME}::tests_common
     INCLUDE_DIRECTORIES
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-)]]
+)
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_Bars
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "market/core/series"
+    SOURCES
+        tests/series/Bars.cpp
+    LINK_LIBRARIES
+        ${PROJECT_NAME}::tests_common
+    INCLUDE_DIRECTORIES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)

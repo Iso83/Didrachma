@@ -4,8 +4,9 @@
 // Original code licensed under the MIT License.
 // Copyright (c) 2022 Evan Pezent & ImPlot Community
 
+#include "App.h"
+
 #include <CLI/CLI.hpp>
-#include <Didrachma/apps/chart/App.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_internal.h>
@@ -22,6 +23,12 @@ extern "C" __declspec(dllexport) unsigned long AmdPowerXpressRequestHighPerforma
 #endif
 
 namespace Didrachma::Apps::Chart {
+
+ImVec2 App::GetWindowSize() const {
+    int width, height;
+    glfwGetWindowSize(Window, &width, &height);
+    return ImVec2(width, height);
+}
 
 void StyeColorsApp() {
     static const ImVec4 bg_dark = ImVec4(0.15f, 0.16f, 0.21f, 1.00f);
