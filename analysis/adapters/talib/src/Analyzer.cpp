@@ -4,22 +4,15 @@
 #include <Didrachma/analysis/adapters/talib/Analyzer.h>
 #include <Didrachma/analysis/core/indicator/Validation.h>
 #include <algorithm>
+#include <cmath>
+#include <map>
 #include <ta_abstract.h>
 #include <ta_libc.h>
 
 using namespace Didrachma::Analysis::Core::Indicator;
 
 namespace Didrachma::Analysis::Adapters::TaLib {
-std::int64_t integer_parameter(const Instance& instance, const std::string& id) {
-    const auto at = instance.parameters.find(id);
-    return at == instance.parameters.end() ? 0 : std::get<std::int64_t>(at->second);
-}
-
-double real_parameter(const Instance& instance, const std::string& id) {
-    const auto at = instance.parameters.find(id);
-    return at == instance.parameters.end() ? 0.0 : std::get<double>(at->second);
-}
-
+namespace Intern {
 void merge(OutputSeries& destination, OutputSeries calculated) {
     if (calculated.samples.empty())
         return;
@@ -29,13 +22,59 @@ void merge(OutputSeries& destination, OutputSeries calculated) {
     destination.samples.insert(destination.samples.end(), calculated.samples.begin(), calculated.samples.end());
 }
 
+struct Holder {
+    TA_ParamHolder* value{};
+    explicit Holder(const TA_FuncHandle* handle) {
+        if (TA_ParamHolderAlloc(handle, &value) != TA_SUCCESS)
+            value = nullptr;
+    }
+    ~Holder() {
+        if (value)
+            TA_ParamHolderFree(value);
+    }
+    Holder(const Holder&) = delete;
+    Holder& operator=(const Holder&) = delete;
+};
+
+TA_RetCode configure_options(const Descriptor& descriptor, const Instance& instance, TA_ParamHolder* holder) {
+    for (std::size_t i = 0; i < descriptor.options.size(); ++i) {
+        const auto& option = descriptor.options[i];
+        const auto found = instance.parameters.find(option.id);
+        if (found == instance.parameters.end())
+            return TA_BAD_PARAM;
+
+        const auto code =
+            option.integer
+                ? TA_SetOptInputParamInteger(holder, static_cast<unsigned int>(i),
+                                             static_cast<TA_Integer>(std::get<std::int64_t>(found->second)))
+                : TA_SetOptInputParamReal(holder, static_cast<unsigned int>(i), std::get<double>(found->second));
+        if (code != TA_SUCCESS)
+            return code;
+    }
+
+    return TA_SUCCESS;
+}
+
+int lookback(const Descriptor& descriptor, const Instance& instance) {
+    Holder holder{descriptor.handle};
+    TA_Integer value{};
+    if (!holder.value || configure_options(descriptor, instance, holder.value) != TA_SUCCESS ||
+        TA_GetLookback(holder.value, &value) != TA_SUCCESS)
+        return -1;
+
+    return value;
+}
+} // namespace Intern
+
 class Analyzer::Impl {
 public:
-    Result cached;
-    std::size_t input_size{};
-    std::string instance_id;
-    std::string definition_id;
-    std::map<std::string, ParameterValue> parameters;
+    struct Cache {
+        Result result;
+        std::size_t input_size{};
+        std::string definition_id;
+        std::map<std::string, ParameterValue> parameters;
+    };
+    std::map<std::string, Cache> instances;
 };
 
 Analyzer::Analyzer() : m_impl(std::make_unique<Impl>()) {
@@ -52,45 +91,54 @@ std::vector<Definition> Analyzer::catalog() const {
 
 CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
     Intern::Runtime::instance();
-    if (request.input_revision == m_impl->cached.input_revision && request.instance.id == m_impl->instance_id)
-        return {m_impl->cached, RecalculationKind::None};
+    auto& cache = m_impl->instances[request.instance.id];
+    const bool same_configuration =
+        request.instance.definition_id == cache.definition_id && request.instance.parameters == cache.parameters;
+    if (same_configuration && request.input_revision == cache.result.input_revision)
+        return {cache.result, RecalculationKind::None};
+
+    auto publish = [&](Result result, RecalculationKind mode) {
+        result.revision = cache.result.revision + 1;
+        cache.result = result;
+        cache.input_size = request.bars.size();
+        cache.definition_id = request.instance.definition_id;
+        cache.parameters = request.instance.parameters;
+        return CalculationOutcome{std::move(result), mode};
+    };
 
     const auto definitions = Intern::catalog();
     const auto definition = std::ranges::find(definitions, request.instance.definition_id, &Definition::id);
     if (definition == definitions.end())
-        return {{{},
-                 request.input_revision,
-                 m_impl->cached.revision + 1,
-                 CalculationState::Error,
-                 CalculationError{CalculationErrorCode::UnknownDefinition, "Unknown indicator definition"}},
-                RecalculationKind::Full};
+        return publish({{},
+                        request.input_revision,
+                        0,
+                        CalculationState::Error,
+                        CalculationError{CalculationErrorCode::UnknownDefinition, "Unknown indicator definition"}},
+                       RecalculationKind::Full);
     if (const auto error = validate_parameters(*definition, request.instance.parameters))
-        return {{{},
-                 request.input_revision,
-                 m_impl->cached.revision + 1,
-                 CalculationState::Error,
-                 CalculationError{CalculationErrorCode::InvalidParameters, error->message}},
-                RecalculationKind::Full};
+        return publish({{},
+                        request.input_revision,
+                        0,
+                        CalculationState::Error,
+                        CalculationError{CalculationErrorCode::InvalidParameters, error->message}},
+                       RecalculationKind::Full);
 
-    const auto period = static_cast<int>(integer_parameter(request.instance, "period"));
-    const auto lookback = request.instance.definition_id == "sma"
-                              ? TA_SMA_Lookback(period)
-                              : TA_BBANDS_Lookback(period, real_parameter(request.instance, "deviation"),
-                                                   real_parameter(request.instance, "deviation"), TA_MAType_SMA);
+    const auto* adapter = Intern::descriptor(request.instance.definition_id);
+    const auto lookback = Intern::lookback(*adapter, request.instance);
     if (request.bars.size() <= static_cast<std::size_t>(lookback))
-        return {{{},
-                 request.input_revision,
-                 m_impl->cached.revision + 1,
-                 Core::Indicator::CalculationState::InsufficientHistory,
-                 {},
-                 static_cast<std::size_t>(lookback + 1)},
-                RecalculationKind::Full};
+        return publish({{},
+                        request.input_revision,
+                        0,
+                        CalculationState::InsufficientHistory,
+                        {},
+                        static_cast<std::size_t>(lookback + 1)},
+                       RecalculationKind::Full);
 
     RecalculationKind mode = RecalculationKind::Full;
     std::size_t start = 0;
-    if (request.dirty_range && request.instance.id == m_impl->instance_id &&
-        request.instance.definition_id == m_impl->definition_id && request.instance.parameters == m_impl->parameters &&
-        request.bars.size() >= m_impl->input_size && !m_impl->cached.outputs.empty()) {
+    if (request.dirty_range && same_configuration && request.bars.size() >= cache.input_size &&
+        !cache.result.outputs.empty() && adapter->definition.id != "ad" && adapter->definition.id != "adosc" &&
+        adapter->definition.id != "obv" && adapter->definition.id != "sar" && adapter->definition.id != "sarext") {
         const auto dirty = std::ranges::lower_bound(request.bars, request.dirty_range->begin, {},
                                                     &Market::Core::Series::Bar::open_time);
         const auto dirty_index = static_cast<std::size_t>(std::distance(request.bars.begin(), dirty));
@@ -98,66 +146,86 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
         mode = RecalculationKind::Tail;
     }
 
-    std::vector<double> input;
-    input.reserve(request.bars.size() - start);
-    for (std::size_t i = start; i < request.bars.size(); ++i)
-        input.push_back(request.bars[i].close);
-
-    int output_begin = 0;
-    int output_count = 0;
-    std::vector<OutputSeries> calculated;
-    TA_RetCode code = TA_SUCCESS;
-    if (request.instance.definition_id == "sma") {
-        std::vector<double> values(input.size());
-        code = TA_SMA(0, static_cast<int>(input.size()) - 1, input.data(), period, &output_begin, &output_count,
-                      values.data());
-        calculated = {{"value", {}}};
-        for (int i = 0; i < output_count; ++i)
-            calculated[0].samples.push_back({request.bars[start + output_begin + i].open_time, values[i]});
-    } else {
-        std::vector<double> upper(input.size()), middle(input.size()), lower(input.size());
-        const auto deviation = real_parameter(request.instance, "deviation");
-        code = TA_BBANDS(0, static_cast<int>(input.size()) - 1, input.data(), period, deviation, deviation,
-                         TA_MAType_SMA, &output_begin, &output_count, upper.data(), middle.data(), lower.data());
-        calculated = {{"upper", {}}, {"middle", {}}, {"lower", {}}};
-        for (int i = 0; i < output_count; ++i) {
-            const auto timestamp = request.bars[start + output_begin + i].open_time;
-            calculated[0].samples.push_back({timestamp, upper[i]});
-            calculated[1].samples.push_back({timestamp, middle[i]});
-            calculated[2].samples.push_back({timestamp, lower[i]});
-        }
+    std::vector<double> open, high, low, close, volume;
+    const auto requires_input = [&](MarketInput input) {
+        return std::ranges::find(adapter->definition.inputs, input) != adapter->definition.inputs.end();
+    };
+    for (std::size_t i = start; i < request.bars.size(); ++i) {
+        const auto& bar = request.bars[i];
+        if ((requires_input(MarketInput::Open) && !std::isfinite(bar.open)) ||
+            (requires_input(MarketInput::High) && !std::isfinite(bar.high)) ||
+            (requires_input(MarketInput::Low) && !std::isfinite(bar.low)) ||
+            (requires_input(MarketInput::Close) && !std::isfinite(bar.close)) ||
+            (requires_input(MarketInput::Volume) && !std::isfinite(bar.volume)))
+            return publish(
+                {{},
+                 request.input_revision,
+                 0,
+                 CalculationState::Error,
+                 CalculationError{CalculationErrorCode::MissingInput, "Required market input is not finite"}},
+                mode);
+        open.push_back(bar.open);
+        high.push_back(bar.high);
+        low.push_back(bar.low);
+        close.push_back(bar.close);
+        volume.push_back(bar.volume);
     }
 
-    if (code != TA_SUCCESS)
-        return {{{},
-                 request.input_revision,
-                 m_impl->cached.revision + 1,
-                 CalculationState::Error,
-                 CalculationError{CalculationErrorCode::LibraryFailure,
-                                  "TA-Lib calculation failed with code " + std::to_string(code)}},
-                mode};
+    Intern::Holder holder{adapter->handle};
+    TA_RetCode code = holder.value ? Intern::configure_options(*adapter, request.instance, holder.value) : TA_ALLOC_ERR;
+    for (std::size_t i = 0; code == TA_SUCCESS && i < adapter->inputs.size(); ++i) {
+        const auto& input = adapter->inputs[i];
+        code = input.kind == Intern::Input::Kind::Real
+                   ? TA_SetInputParamRealPtr(holder.value, static_cast<unsigned int>(i), close.data())
+                   : TA_SetInputParamPricePtr(holder.value, static_cast<unsigned int>(i), open.data(), high.data(),
+                                              low.data(), close.data(), volume.data(), nullptr);
+    }
 
-    Result result = mode == RecalculationKind::Tail ? m_impl->cached : Result{};
+    std::vector<std::vector<double>> real_outputs(adapter->outputs.size(), std::vector<double>(close.size()));
+    std::vector<std::vector<TA_Integer>> integer_outputs(adapter->outputs.size(),
+                                                         std::vector<TA_Integer>(close.size()));
+    for (std::size_t i = 0; code == TA_SUCCESS && i < adapter->outputs.size(); ++i)
+        code = adapter->outputs[i].integer
+                   ? TA_SetOutputParamIntegerPtr(holder.value, static_cast<unsigned int>(i), integer_outputs[i].data())
+                   : TA_SetOutputParamRealPtr(holder.value, static_cast<unsigned int>(i), real_outputs[i].data());
+
+    TA_Integer output_begin = 0, output_count = 0;
+    if (code == TA_SUCCESS)
+        code = TA_CallFunc(holder.value, 0, static_cast<TA_Integer>(close.size()) - 1, &output_begin, &output_count);
+    std::vector<OutputSeries> calculated;
+    calculated.reserve(adapter->outputs.size());
+    for (std::size_t output_index = 0; output_index < adapter->outputs.size(); ++output_index) {
+        calculated.push_back({adapter->outputs[output_index].id, {}});
+        for (TA_Integer i = 0; i < output_count; ++i) {
+            const auto value = adapter->outputs[output_index].integer
+                                   ? static_cast<double>(integer_outputs[output_index][i])
+                                   : real_outputs[output_index][i];
+            calculated.back().samples.push_back(
+                {request.bars[start + static_cast<std::size_t>(output_begin + i)].open_time, value});
+        }
+    }
+    if (code != TA_SUCCESS)
+        return publish({{},
+                        request.input_revision,
+                        0,
+                        CalculationState::Error,
+                        CalculationError{CalculationErrorCode::LibraryFailure,
+                                         "TA-Lib calculation failed with code " + std::to_string(code)}},
+                       mode);
+
+    Result result = mode == RecalculationKind::Tail ? cache.result : Result{};
     if (mode == RecalculationKind::Tail)
         for (auto& output : calculated) {
             auto destination = std::ranges::find(result.outputs, output.output_id, &OutputSeries::output_id);
-            merge(*destination, std::move(output));
+            Intern::merge(*destination, std::move(output));
         }
     else
         result.outputs = std::move(calculated);
 
     result.input_revision = request.input_revision;
-    result.revision = m_impl->cached.revision + 1;
     result.state = CalculationState::Ready;
     result.error.reset();
     result.required_history = static_cast<std::size_t>(lookback + 1);
-
-    m_impl->cached = result;
-    m_impl->input_size = request.bars.size();
-    m_impl->instance_id = request.instance.id;
-    m_impl->definition_id = request.instance.definition_id;
-    m_impl->parameters = request.instance.parameters;
-
-    return {std::move(result), mode};
+    return publish(std::move(result), mode);
 }
 } // namespace Didrachma::Analysis::Adapters::TaLib

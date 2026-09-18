@@ -2,6 +2,7 @@
 
 #include <Didrachma/analysis/core/indicator/Calculation.h>
 #include <Didrachma/analysis/core/indicator/Definition.h>
+#include <vector>
 
 namespace Didrachma::Analysis::Core::Indicator {
 class Analyzer {

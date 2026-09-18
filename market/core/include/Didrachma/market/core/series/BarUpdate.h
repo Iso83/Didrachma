@@ -2,6 +2,7 @@
 
 #include <Didrachma/market/core/series/Bar.h>
 #include <Didrachma/market/core/series/Key.h>
+#include <cstdint>
 #include <vector>
 
 namespace Didrachma::Market::Core::Series {

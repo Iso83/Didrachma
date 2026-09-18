@@ -14,10 +14,18 @@ bool Bars::apply(const BarUpdate& update) {
         return false;
 
     auto incoming = update.bars;
-    std::ranges::sort(incoming, {}, &Bar::open_time);
-    incoming.erase(std::unique(incoming.begin(), incoming.end(),
-                               [](const Bar& a, const Bar& b) { return a.open_time == b.open_time; }),
-                   incoming.end());
+    // Updates are applied in their published order: for duplicate timestamps the
+    // last value in one update wins. stable_sort preserves that order.
+    std::ranges::stable_sort(incoming, {}, &Bar::open_time);
+    std::vector<Bar> normalized;
+    normalized.reserve(incoming.size());
+    for (auto& bar : incoming) {
+        if (!normalized.empty() && normalized.back().open_time == bar.open_time)
+            normalized.back() = std::move(bar);
+        else
+            normalized.push_back(std::move(bar));
+    }
+    incoming = std::move(normalized);
 
     std::optional<Range> replaced_range;
     bool changed = false;

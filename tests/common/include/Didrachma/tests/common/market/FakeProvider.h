@@ -51,5 +51,9 @@ public:
             if (listener.first == update.key)
                 listener.second(update);
     }
+
+    [[nodiscard]] std::size_t subscriber_count() const {
+        return m_handlers.size();
+    }
 };
 } // namespace Didrachma::Testing

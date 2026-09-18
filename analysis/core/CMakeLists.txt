@@ -93,3 +93,25 @@ cppcmake_test_add(
     SOURCES
         tests/Validation.cpp
 )
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_MultiTimeframe
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "analysis/core"
+    SOURCES
+        tests/MultiTimeframe.cpp
+)
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_Condition
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "analysis/core"
+    SOURCES
+        tests/Condition.cpp
+)

@@ -1,22 +1,25 @@
 #include "YahooStockDataAdapter.h"
 
+#include <cstdio>
+#include <stdexcept>
+
 using namespace Didrachma::Apps::Chart::Data;
 using namespace Didrachma::Market::Core::Time;
 
 namespace Didrachma::Apps::Chart::Adapters {
 
 Market::Core::Time::UtcTimestamp parse_date(const std::string& value) {
-    std::tm tm{};
-    std::istringstream input(value);
-    input >> std::get_time(&tm, "%Y-%m-%d");
+    int year{}, month{}, day{}, consumed{};
+    if (std::sscanf(value.c_str(), "%4d-%2d-%2d%n", &year, &month, &day, &consumed) != 3 ||
+        consumed != static_cast<int>(value.size()))
+        throw std::invalid_argument("Date must use YYYY-MM-DD format");
 
-#ifdef _WIN32
-    const std::time_t utc_seconds = _mkgmtime(&tm);
-#else
-    const std::time_t utc_seconds = timegm(&tm);
-#endif
+    const std::chrono::year_month_day date{std::chrono::year{year}, std::chrono::month{static_cast<unsigned>(month)},
+                                           std::chrono::day{static_cast<unsigned>(day)}};
+    if (!date.ok())
+        throw std::invalid_argument("Date is not a valid calendar date");
 
-    return Market::Core::Time::UtcTimestamp{std::chrono::seconds{utc_seconds}};
+    return std::chrono::sys_days{date};
 }
 
 Market::Core::Time::Frame timeframe(Interval value) {
@@ -29,8 +32,14 @@ Market::Core::Time::Frame timeframe(Interval value) {
 
 Data::TickerData YahooStockDataAdapter::get_ticker(std::string ticker, std::string start, std::string end,
                                                    Interval interval) {
-    auto result = m_provider.load_history(
-        {{"yahoo", ticker, timeframe(interval)}, {parse_date(start), parse_date(end) + std::chrono::days{1}}});
+    Market::Core::Provider::HistoryResult result;
+    try {
+        result = m_provider.load_history(
+            {{"yahoo", ticker, timeframe(interval)}, {parse_date(start), parse_date(end) + std::chrono::days{1}}});
+    } catch (const std::invalid_argument& error) {
+        m_error = error.what();
+        return TickerData{"ERROR"};
+    }
     if (const auto* error = std::get_if<Market::Core::Provider::Error>(&result)) {
         m_error = error->message;
         return TickerData{"ERROR"};

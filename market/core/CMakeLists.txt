@@ -91,6 +91,17 @@ cppcmake_test_add(
 
 cppcmake_test_add(
     NAME
+        Test_${MODULE_TARGET}_Resampler
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "market/core/series"
+    SOURCES
+        tests/series/Resampler.cpp
+)
+
+cppcmake_test_add(
+    NAME
         Test_${MODULE_TARGET}_Bars
     TARGET
         ${MODULE_TARGET}

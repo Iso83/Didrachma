@@ -45,9 +45,19 @@ cppcmake_gitsubmodule_init_missing_targets(
 
     PATH
         "extern/CppDependencies"
+
+    PATH
+        "extern/ScopeCanvas"
+    TARGET
+        "ScopeCanvas_engine_core"
 )
 
 include("extern/CppDependencies/CppDependencies.cmake")
+
+cppcmake_dependency_add_subdirectory_unless_target(
+    "ScopeCanvas_engine_core"
+    "extern/ScopeCanvas"
+)
 
 cppdependencies_glad(GLAD)
 cppdependencies_glfw(GLFW)
@@ -69,8 +79,13 @@ cppcmake_module_add(market/providers/yahoo)
 cppcmake_module_add(analysis/core)
 cppcmake_module_add(analysis/adapters/talib)
 
+cppcmake_module_add(stockChart/core)
+cppcmake_module_add(stockChart/render)
+cppcmake_module_add(studio/core)
+
 if(${PROJECT_NAME}_BUILD_TESTS)
     cppcmake_module_add(tests/common)
 endif()
 
 cppcmake_module_add(apps/chart)
+cppcmake_module_add(apps/studio)

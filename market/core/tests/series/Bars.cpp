@@ -1,5 +1,5 @@
 #include "TestAssert.h"
-#include "common\market\Series.h"
+#include "common/market/Series.h"
 
 #include <Didrachma/market/core/series/Bars.h>
 
@@ -26,7 +26,24 @@ int test_update_rules_and_revisions() {
     return 0;
 }
 
+int test_identity_rejections_and_duplicate_precedence() {
+    CPPTEST_ASSERT((Frame{10, Unit::Minute} != Frame{1, Unit::Hour}));
+    CPPTEST_ASSERT((Frame{1, Unit::Hour} != Frame{1, Unit::Day}));
+    CPPTEST_ASSERT((Key{"fake", "TEST", {10, Unit::Minute}} == key()));
+
+    Bars series(key());
+    CPPTEST_ASSERT(!series.apply({{"other", "TEST", {10, Unit::Minute}}, BarUpdateKind::Reset, {bar(0)}}));
+    CPPTEST_ASSERT(!series.apply({key(), BarUpdateKind::AppendClosed, {bar(0, BarState::Forming)}}));
+
+    CPPTEST_ASSERT(series.apply(
+        {key(), BarUpdateKind::Backfill, {bar(10, BarState::Closed, 1), bar(0), bar(10, BarState::Closed, 7)}}));
+    CPPTEST_ASSERT(series.bars().size() == 2);
+    CPPTEST_ASSERT(series.bars()[1].close == 7);
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_update_rules_and_revisions);
+    CPPTEST_RUN(test_identity_rejections_and_duplicate_precedence);
     return 0;
 }

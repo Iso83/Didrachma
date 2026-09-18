@@ -3,6 +3,8 @@
 #include <Didrachma/analysis/core/indicator/Instance.h>
 #include <Didrachma/analysis/core/indicator/Result.h>
 #include <Didrachma/market/core/series/Bar.h>
+#include <cstdint>
+#include <optional>
 #include <span>
 
 namespace Didrachma::Analysis::Core::Indicator {

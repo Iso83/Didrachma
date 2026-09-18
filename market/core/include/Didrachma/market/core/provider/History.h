@@ -2,7 +2,9 @@
 
 #include <Didrachma/market/core/series/Bar.h>
 #include <Didrachma/market/core/series/Key.h>
+#include <string>
 #include <variant>
+#include <vector>
 
 namespace Didrachma::Market::Core::Provider {
 struct HistoryRequest {
@@ -12,6 +14,7 @@ struct HistoryRequest {
 
 struct Error {
     std::string message;
+    std::string code;
 };
 
 using HistoryResult = std::variant<std::vector<Series::Bar>, Error>;

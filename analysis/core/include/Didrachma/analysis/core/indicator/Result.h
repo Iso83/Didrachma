@@ -9,7 +9,7 @@
 namespace Didrachma::Analysis::Core::Indicator {
 enum class CalculationState { Ready, InsufficientHistory, Error };
 
-enum class CalculationErrorCode { UnknownDefinition, InvalidParameters, LibraryFailure };
+enum class CalculationErrorCode { UnknownDefinition, InvalidParameters, MissingInput, LibraryFailure };
 
 struct CalculationError {
     CalculationErrorCode code{};

@@ -18,12 +18,10 @@ public:
     Provider& operator=(Provider&&) noexcept;
 
     [[nodiscard]] Core::Provider::CapabilitySet capabilities() const override {
-        return Core::Provider::CapabilitySet::from(Core::Provider::Capability::History);
+        return Core::Provider::Capability::History | Core::Provider::Capability::Polling;
     }
     Core::Provider::HistoryResult load_history(const Core::Provider::HistoryRequest&) override;
     std::unique_ptr<Core::Provider::Subscription> subscribe(const Core::Series::Key&,
-                                                            Core::Provider::UpdateHandler) override {
-        return {};
-    }
+                                                            Core::Provider::UpdateHandler) override;
 };
 } // namespace Didrachma::Market::Providers::Yahoo

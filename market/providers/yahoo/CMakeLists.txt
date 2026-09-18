@@ -98,6 +98,8 @@ cppcmake_test_add(
     LINK_LIBRARIES
         ${CURL}
         ${PROJECT_NAME}::tests_common
+    INCLUDE_DIRECTORIES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 cppcmake_test_add(

@@ -2,6 +2,7 @@
 
 #include <Didrachma/analysis/core/indicator/Parameter.h>
 #include <map>
+#include <string>
 
 namespace Didrachma::Analysis::Core::Indicator {
 struct Instance {

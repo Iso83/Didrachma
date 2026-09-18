@@ -106,7 +106,7 @@ cppcmake_test_add(
         tests/TickerData.cpp
         src/data/TickerData.cpp
     LINK_LIBRARIES
-        ${PROJECT_NAME}_market_providers_yahoo
+        ${PROJECT_NAME}::market_providers_yahoo
         glad
         ${IMPLOT}
     INCLUDE_DIRECTORIES

@@ -3,6 +3,7 @@
 #include <Didrachma/market/core/series/BarUpdate.h>
 #include <cstdint>
 #include <span>
+#include <utility>
 
 namespace Didrachma::Market::Core::Series {
 class Bars {
