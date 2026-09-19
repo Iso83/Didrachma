@@ -118,39 +118,39 @@ Stop after Phase 1. Report the selected patterns, event mapping, closed-bar beha
 
 ### Versioned model
 
-- [ ] Add a UI-independent strategy definition with a stable id, display name, version, description, direction (`Long`/`Short`), and one primary series binding.
-- [ ] Model named series bindings with:
+- [x] Add a UI-independent strategy definition with a stable id, display name, version, description, direction (`Long`/`Short`), and one primary series binding.
+- [x] Model named series bindings with:
   - provider id;
   - instrument selector: `Subject` or `Fixed(symbol)`;
   - timeframe;
   - optional maximum data age/staleness policy.
-- [ ] Model named indicator bindings using a series binding, indicator definition id, parameters, and stable binding id.
-- [ ] Model condition expressions as a typed tree, not free-form strings:
+- [x] Model named indicator bindings using a series binding, indicator definition id, parameters, and stable binding id.
+- [x] Model condition expressions as a typed tree, not free-form strings:
   - market comparisons;
   - indicator comparisons/crosses;
   - pattern occurrence;
   - elapsed run time and closed-bar count;
   - unrealized return/loss;
   - `All`, `Any`, `Not`, and ordered `Sequence` groups.
-- [ ] For `Sequence`, persist the ordered steps and optional maximum elapsed time/bar count. A single occurrence must not silently satisfy several steps.
-- [ ] Model the initial entry plan, stop-loss, target, explicit exit conditions, and ordered runtime rules. Each runtime rule consists of a condition, priority, and one or more typed actions such as `AdjustStop`, `AdjustTarget`, or `Exit`.
-- [ ] Represent prices as explicit policies (absolute price, percentage from entry, or indicator-derived value). Do not encode price meaning in a bare `double`.
-- [ ] Validate duplicate ids, missing bindings, dependency cycles, bad indicator parameters, invalid timeframes, missing subject/fixed symbols, impossible price policies, and invalid condition/action references before a definition can run.
+- [x] For `Sequence`, persist the ordered steps and optional maximum elapsed time/bar count. A single occurrence must not silently satisfy several steps.
+- [x] Model the initial entry plan, stop-loss, target, explicit exit conditions, and ordered runtime rules. Each runtime rule consists of a condition, priority, and one or more typed actions such as `AdjustStop`, `AdjustTarget`, or `Exit`.
+- [x] Represent prices as explicit policies (absolute price, percentage from entry, or indicator-derived value). Do not encode price meaning in a bare `double`.
+- [x] Validate duplicate ids, missing bindings, dependency cycles, bad indicator parameters, invalid timeframes, missing subject/fixed symbols, impossible price policies, and invalid condition/action references before a definition can run.
 
 ### Save/load contract
 
-- [ ] Add a repository interface plus a versioned JSON file implementation. Keep this separate from chart profiles and workspace persistence.
-- [ ] Preserve all definition ids and binding ids in a save/load round-trip.
-- [ ] Return structured validation/load errors with a JSON path or model field where practical.
-- [ ] Reject unsupported future format versions without partially loading them.
-- [ ] A running strategy uses an immutable snapshot. Editing and saving a definition must not mutate an already-running instance without an explicit restart.
+- [x] Add a repository interface plus a versioned JSON file implementation. Keep this separate from chart profiles and workspace persistence.
+- [x] Preserve all definition ids and binding ids in a save/load round-trip.
+- [x] Return structured validation/load errors with a JSON path or model field where practical.
+- [x] Reject unsupported future format versions without partially loading them.
+- [x] A running strategy uses an immutable snapshot. Editing and saving a definition must not mutate an already-running instance without an explicit restart.
 
 ### Tests and Phase 2 gate
 
-- [ ] Test a strategy using a subject instrument on 10-minute and 1-hour bindings plus a fixed sector peer on daily bars.
-- [ ] Test nested boolean groups and an ordered sequence, including timeout and out-of-order occurrences.
-- [ ] Test every validation failure above and exact JSON round-trip of a representative strategy.
-- [ ] Run the relevant tests, build both applications, and run the complete CTest suite.
+- [x] Test a strategy using a subject instrument on 10-minute and 1-hour bindings plus a fixed sector peer on daily bars.
+- [x] Test nested boolean groups and an ordered sequence, including timeout and out-of-order occurrences.
+- [x] Test every validation failure above and exact JSON round-trip of a representative strategy.
+- [x] Run the relevant tests, build both applications, and run the complete CTest suite.
 
 ### Phase 2 review gate
 

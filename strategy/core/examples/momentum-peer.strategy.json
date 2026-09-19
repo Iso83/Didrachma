@@ -1,0 +1,176 @@
+{
+    "formatVersion": 1,
+    "id": "momentum-peer",
+    "displayName": "Momentum with sector confirmation",
+    "version": 3,
+    "description": "Enter after intraday momentum and daily peer confirmation.",
+    "direction": "long",
+    "primarySeriesId": "subject-10m",
+    "series": [
+        {
+            "id": "subject-10m",
+            "providerId": "fixture",
+            "instrument": { "kind": "subject" },
+            "timeframe": {
+                "quantity": 10,
+                "unit": "minute"
+            },
+            "maximumDataAgeSeconds": 900
+        },
+        {
+            "id": "subject-1h",
+            "providerId": "fixture",
+            "instrument": { "kind": "subject" },
+            "timeframe": {
+                "quantity": 1,
+                "unit": "hour"
+            },
+            "maximumDataAgeSeconds": 7200
+        },
+        {
+            "id": "sector-daily",
+            "providerId": "fixture",
+            "instrument": {
+                "kind": "fixed",
+                "symbol": "XLK"
+            },
+            "timeframe": {
+                "quantity": 1,
+                "unit": "day"
+            },
+            "maximumDataAgeSeconds": 172800
+        }
+    ],
+    "indicators": [
+        {
+            "id": "fast",
+            "seriesId": "subject-10m",
+            "definitionId": "sma",
+            "parameters": { "period": 10 }
+        },
+        {
+            "id": "slow",
+            "seriesId": "subject-1h",
+            "definitionId": "sma",
+            "parameters": { "period": 20 }
+        },
+        {
+            "id": "peer-pattern",
+            "seriesId": "sector-daily",
+            "definitionId": "cdldoji",
+            "parameters": {}
+        }
+    ],
+    "entry": {
+        "condition": {
+            "id": "entry-sequence",
+            "kind": "sequence",
+            "children": [
+                {
+                    "id": "peer-doji",
+                    "kind": "patternOccurrence",
+                    "predicate": {
+                        "indicatorId": "peer-pattern",
+                        "direction": "long"
+                    }
+                },
+                {
+                    "id": "fast-cross",
+                    "kind": "indicatorCross",
+                    "predicate": {
+                        "leftIndicatorId": "fast",
+                        "leftOutputId": "value",
+                        "rightIndicatorId": "slow",
+                        "rightOutputId": "value",
+                        "direction": "above"
+                    }
+                }
+            ],
+            "sequence": {
+                "maximumElapsedSeconds": 7200,
+                "maximumClosedBars": 12
+            }
+        },
+        "price": {
+            "kind": "indicatorValue",
+            "value": 0.0,
+            "indicatorId": "fast",
+            "outputId": "value",
+            "offset": 0.05
+        }
+    },
+    "stopLoss": {
+        "kind": "percentageFromEntry",
+        "value": 2.0,
+        "indicatorId": "",
+        "outputId": "",
+        "offset": 0.0
+    },
+    "target": {
+        "kind": "percentageFromEntry",
+        "value": 5.0,
+        "indicatorId": "",
+        "outputId": "",
+        "offset": 0.0
+    },
+    "exits": [
+        {
+            "id": "timed-exit",
+            "condition": {
+                "id": "elapsed",
+                "kind": "elapsedTime",
+                "predicate": {
+                    "comparison": "greaterOrEqual",
+                    "durationSeconds": 86400
+                }
+            }
+        }
+    ],
+    "runtimeRules": [
+        {
+            "id": "protect-profit",
+            "priority": 10,
+            "condition": {
+                "id": "gain",
+                "kind": "unrealizedReturn",
+                "predicate": {
+                    "kind": "gain",
+                    "comparison": "greaterOrEqual",
+                    "percentage": 3.0
+                }
+            },
+            "actions": [
+                {
+                    "kind": "adjustStop",
+                    "price": {
+                        "kind": "percentageFromEntry",
+                        "value": 1.0,
+                        "indicatorId": "",
+                        "outputId": "",
+                        "offset": 0.0
+                    },
+                    "exitReason": ""
+                }
+            ]
+        },
+        {
+            "id": "risk-exit",
+            "priority": 20,
+            "condition": {
+                "id": "loss",
+                "kind": "unrealizedReturn",
+                "predicate": {
+                    "kind": "loss",
+                    "comparison": "greaterOrEqual",
+                    "percentage": 4.0
+                }
+            },
+            "actions": [
+                {
+                    "kind": "exit",
+                    "exitReason": "maximum-loss"
+                }
+            ]
+        }
+    ]
+}
