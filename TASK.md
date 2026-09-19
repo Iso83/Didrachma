@@ -162,27 +162,27 @@ Stop after the versioned model and persistence are complete. Provide one readabl
 
 ### Data graph
 
-- [ ] Resolve a strategy definition plus optional subject symbol into concrete provider-neutral `Series::Key` values.
-- [ ] Build one dependency graph covering series, resampling, indicator instances, pattern events, and strategy conditions across all instruments/timeframes.
-- [ ] Determine required warm-up from indicator lookbacks and sequence/rule history before requesting data.
-- [ ] Share identical series and calculations between bindings and charts. Use existing provider, queue, `Bars`, revision, dirty-range, and resampling primitives.
-- [ ] Support provider-native and derived timeframes without hard-coding Yahoo into the strategy domain.
-- [ ] Expose per-binding readiness: loading, ready, stale, insufficient history, provider error, and calculation error.
+- [x] Resolve a strategy definition plus optional subject symbol into concrete provider-neutral `Series::Key` values.
+- [x] Build one dependency graph covering series, resampling, indicator instances, pattern events, and strategy conditions across all instruments/timeframes.
+- [x] Determine required warm-up from indicator lookbacks and sequence/rule history before requesting data.
+- [x] Share identical series and calculations between bindings and charts. Use existing provider, queue, `Bars`, revision, dirty-range, and resampling primitives.
+- [x] Support provider-native and derived timeframes without hard-coding Yahoo into the strategy domain.
+- [x] Expose per-binding readiness: loading, ready, stale, insufficient history, provider error, and calculation error.
 
 ### Deterministic evaluation
 
-- [ ] Evaluate on an explicit strategy clock driven by newly closed primary bars.
-- [ ] Align secondary timeframe/instrument inputs by publication time through the existing closed-value semantics. Missing, stale, or forming inputs produce `Unknown`, not false data and not a guessed value.
-- [ ] Define three-valued composition (`True`, `False`, `Unknown`) for every condition group and display evidence for each leaf.
-- [ ] Re-evaluate only the dirty dependency tail, while producing the same result as a full replay.
-- [ ] Keep condition evaluation independent of chart visibility and whether a chart window is open.
+- [x] Evaluate on an explicit strategy clock driven by newly closed primary bars.
+- [x] Align secondary timeframe/instrument inputs by publication time through the existing closed-value semantics. Missing, stale, or forming inputs produce `Unknown`, not false data and not a guessed value.
+- [x] Define three-valued composition (`True`, `False`, `Unknown`) for every condition group and display evidence for each leaf.
+- [x] Re-evaluate only the dirty dependency tail, while producing the same result as a full replay.
+- [x] Keep condition evaluation independent of chart visibility and whether a chart window is open.
 
 ### Tests and Phase 3 gate
 
-- [ ] Use fake providers to test 10-minute, 1-hour, and daily data for a subject plus a fixed peer.
-- [ ] Prove that a later daily close is unavailable to earlier intraday decisions.
-- [ ] Test missing/stale secondary data, derived timeframes, duplicate series reuse, dirty-tail equivalence, and deterministic results regardless of update arrival order.
-- [ ] Run the complete build/CTest phase gate.
+- [x] Use fake providers to test 10-minute, 1-hour, and daily data for a subject plus a fixed peer.
+- [x] Prove that a later daily close is unavailable to earlier intraday decisions.
+- [x] Test missing/stale secondary data, derived timeframes, duplicate series reuse, dirty-tail equivalence, and deterministic results regardless of update arrival order.
+- [x] Run the complete build/CTest phase gate.
 
 ### Phase 3 review gate
 

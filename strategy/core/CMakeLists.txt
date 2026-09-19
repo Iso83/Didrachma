@@ -123,3 +123,16 @@ cppcmake_test_add(
     INCLUDE_DIRECTORIES
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_Evaluation
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "strategy/core"
+    SOURCES
+        tests/Evaluation.cpp
+    INCLUDE_DIRECTORIES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)

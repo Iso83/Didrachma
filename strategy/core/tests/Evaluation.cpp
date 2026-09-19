@@ -1,0 +1,191 @@
+#include "TestAssert.h"
+
+#include <Didrachma/strategy/core/Evaluation.h>
+#include <algorithm>
+
+using namespace Didrachma;
+using namespace Didrachma::Strategy::Core;
+using namespace std::chrono_literals;
+
+namespace {
+using Bar = Market::Core::Series::Bar;
+using Timestamp = Market::Core::Time::UtcTimestamp;
+
+class Analyzer final : public Analysis::Core::Indicator::Analyzer {
+public:
+    std::vector<Analysis::Core::Indicator::Definition> catalog() const override {
+        return {};
+    }
+
+    Analysis::Core::Indicator::CalculationOutcome
+    calculate(const Analysis::Core::Indicator::CalculationRequest& request) override {
+        Analysis::Core::Indicator::Result result;
+        result.input_revision = request.input_revision;
+        result.revision = request.input_revision;
+        result.state = request.bars.empty() ? Analysis::Core::Indicator::CalculationState::InsufficientHistory
+                                            : Analysis::Core::Indicator::CalculationState::Ready;
+        Analysis::Core::Indicator::OutputSeries output{"value"};
+        for (const auto& bar : request.bars)
+            if (bar.state == Market::Core::Series::BarState::Closed)
+                output.samples.push_back({bar.open_time, request.instance.definition_id == "pattern"
+                                                             ? (bar.close > bar.open ? 100.0 : 0.0)
+                                                             : bar.close});
+        result.outputs.push_back(std::move(output));
+        return {std::move(result), Analysis::Core::Indicator::RecalculationKind::Full};
+    }
+};
+
+class FakeProvider final : public Market::Core::Provider::Data {
+    struct NoSubscription final : Market::Core::Provider::Subscription {};
+
+public:
+    std::vector<Bar> history;
+    std::size_t loads{};
+
+    Market::Core::Provider::CapabilitySet capabilities() const override {
+        return Market::Core::Provider::CapabilitySet::from(Market::Core::Provider::Capability::History);
+    }
+    Market::Core::Provider::HistoryResult load_history(const Market::Core::Provider::HistoryRequest&) override {
+        ++loads;
+        return history;
+    }
+    std::unique_ptr<Market::Core::Provider::Subscription> subscribe(const Market::Core::Series::Key&,
+                                                                    Market::Core::Provider::UpdateHandler) override {
+        return std::make_unique<NoSubscription>();
+    }
+};
+
+Timestamp at(std::int64_t seconds) {
+    return Timestamp{std::chrono::seconds{seconds}};
+}
+
+Bar bar(std::int64_t open, std::int64_t duration, double close,
+        Market::Core::Series::BarState state = Market::Core::Series::BarState::Closed) {
+    return {at(open), at(open + duration), close - 1, close + 1, close - 2, close, 1000, state};
+}
+
+std::shared_ptr<ConditionExpression> market(std::string id, std::string series, double threshold) {
+    auto value = std::make_shared<ConditionExpression>();
+    value->id = std::move(id);
+    value->kind = ConditionKind::MarketComparison;
+    value->predicate = MarketComparison{std::move(series), MarketField::Close, Comparison::Greater, threshold};
+    return value;
+}
+
+Definition definition() {
+    Definition value;
+    value.id = "phase-3";
+    value.display_name = "Phase 3 fixture";
+    value.primary_series_id = "primary";
+    value.series = {{"primary", "fake", {InstrumentKind::Subject, {}}, {10, Market::Core::Time::Unit::Minute}, 20min},
+                    {"primary-copy", "fake", {InstrumentKind::Subject, {}}, {10, Market::Core::Time::Unit::Minute}, {}},
+                    {"hourly", "fake", {InstrumentKind::Subject, {}}, {1, Market::Core::Time::Unit::Hour}, {}},
+                    {"peer", "fake", {InstrumentKind::Fixed, "XLK"}, {1, Market::Core::Time::Unit::Day}, 48h}};
+    value.indicators = {{"slow", "primary", "identity", {{"period", std::int64_t{3}}}}};
+    value.entry.condition = std::make_shared<ConditionExpression>();
+    value.entry.condition->id = "all";
+    value.entry.condition->kind = ConditionKind::All;
+    value.entry.condition->children = {market("subject-up", "primary", 10), market("peer-up", "peer", 50)};
+    value.entry.price = {PricePolicyKind::Absolute, 1};
+    value.stop_loss = {PricePolicyKind::Absolute, 1};
+    value.target = {PricePolicyKind::Absolute, 2};
+    return value;
+}
+} // namespace
+
+int test_resolution_warmup_graph_reuse_and_derived_timeframe() {
+    Analyzer analyzer;
+    auto model = definition();
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    CPPTEST_ASSERT(graph.resolution().errors.empty());
+    CPPTEST_ASSERT(graph.resolution().series[0].key.instrument == "AAPL");
+    CPPTEST_ASSERT(graph.resolution().series[3].key.instrument == "XLK");
+    CPPTEST_ASSERT(graph.unique_series_count() == 3);
+    CPPTEST_ASSERT(graph.required_history("primary") == 3);
+    CPPTEST_ASSERT(!graph.dependency_order().empty());
+
+    const std::vector bars{bar(0, 600, 10),    bar(600, 600, 11),  bar(1200, 600, 12),
+                           bar(1800, 600, 13), bar(2400, 600, 14), bar(3000, 600, 15)};
+    graph.set_series("primary", bars);
+    graph.derive_series("hourly", "primary");
+    CPPTEST_ASSERT(graph.resolution().series[2].derived);
+    CPPTEST_ASSERT(graph.state("primary").readiness == Readiness::Ready);
+    return 0;
+}
+
+int test_publication_alignment_unknown_stale_and_closed_clock() {
+    Analyzer analyzer;
+    DataGraph graph(Snapshot{definition()}, analyzer, "AAPL");
+    const std::vector primary{bar(0, 600, 11), bar(600, 600, 12), bar(1200, 600, 13),
+                              bar(1800, 600, 99, Market::Core::Series::BarState::Forming)};
+    // This daily value only becomes public at t=1800, so it cannot affect t=600 or t=1200.
+    const std::vector peer{bar(-84600, 86400, 60)};
+    graph.set_series("primary", primary);
+    graph.set_series("peer", peer);
+    const auto result = graph.evaluate_entry();
+    CPPTEST_ASSERT(result.size() == 3);
+    CPPTEST_ASSERT(result[0].truth == Truth::Unknown && result[1].truth == Truth::Unknown);
+    CPPTEST_ASSERT(result[2].truth == Truth::True);
+    CPPTEST_ASSERT(result[2].evidence.size() == 2 && result[2].evidence[1].source_time == at(1800));
+    return 0;
+}
+
+int test_arrival_order_dirty_replay_and_error_readiness_are_deterministic() {
+    Analyzer analyzer;
+    const std::vector primary{bar(0, 600, 11), bar(600, 600, 12), bar(1200, 600, 13)};
+    const std::vector peer{bar(-84600, 86400, 60)};
+    DataGraph first(Snapshot{definition()}, analyzer, "AAPL");
+    first.set_series("peer", peer, 1);
+    first.set_series("primary", primary, 1);
+    const auto expected = first.evaluate_entry();
+
+    DataGraph second(Snapshot{definition()}, analyzer, "AAPL");
+    second.set_series("primary", primary, 1);
+    second.set_series("peer", peer, 1);
+    CPPTEST_ASSERT(second.evaluate_entry().back().truth == expected.back().truth);
+    auto corrected = primary;
+    corrected.back().close = 9;
+    second.set_series("primary", corrected, 2);
+    CPPTEST_ASSERT(second.evaluate_entry().back().truth == Truth::False);
+    DataGraph replay(Snapshot{definition()}, analyzer, "AAPL");
+    replay.set_series("primary", corrected, 2);
+    replay.set_series("peer", peer, 1);
+    CPPTEST_ASSERT(replay.evaluate_entry().back().truth == second.evaluate_entry().back().truth);
+    second.set_provider_error("peer", "fixture failure");
+    CPPTEST_ASSERT(second.state("peer").readiness == Readiness::ProviderError);
+    return 0;
+}
+
+int test_provider_history_and_updates_use_provider_neutral_contracts() {
+    Analyzer analyzer;
+    DataGraph graph(Snapshot{definition()}, analyzer, "AAPL");
+    FakeProvider provider;
+    provider.history = {bar(0, 600, 11), bar(600, 600, 12), bar(1200, 600, 13)};
+    graph.load(provider, "primary", {at(0), at(2400)});
+    CPPTEST_ASSERT(provider.loads == 1 && graph.state("primary").readiness == Readiness::Ready);
+
+    const auto key = graph.resolution().series.front().key;
+    graph.apply({key, Market::Core::Series::BarUpdateKind::AppendClosed, {bar(1800, 600, 14)}});
+    FakeProvider peer_provider;
+    peer_provider.history = {bar(-84000, 86400, 60)};
+    graph.load(peer_provider, "peer", {at(-90000), at(3000)});
+    graph.derive_series("hourly", "primary");
+    CPPTEST_ASSERT(peer_provider.loads == 1 && graph.resolution().series[2].derived);
+    CPPTEST_ASSERT(graph.evaluate_entry().size() == 4);
+
+    DataGraph stale(Snapshot{definition()}, analyzer, "AAPL");
+    const std::vector late_primary{bar(3 * 86400, 600, 20), bar(3 * 86400 + 600, 600, 21),
+                                   bar(3 * 86400 + 1200, 600, 22)};
+    stale.set_series("primary", late_primary);
+    stale.set_series("peer", peer_provider.history);
+    CPPTEST_ASSERT(stale.state("peer").readiness == Readiness::Stale);
+    return 0;
+}
+
+int main() {
+    CPPTEST_RUN(test_resolution_warmup_graph_reuse_and_derived_timeframe);
+    CPPTEST_RUN(test_publication_alignment_unknown_stale_and_closed_clock);
+    CPPTEST_RUN(test_arrival_order_dirty_replay_and_error_readiness_are_deterministic);
+    CPPTEST_RUN(test_provider_history_and_updates_use_provider_neutral_contracts);
+    return 0;
+}
