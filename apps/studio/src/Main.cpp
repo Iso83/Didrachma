@@ -27,6 +27,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <memory>
+#include <set>
 #include <string_view>
 #include <vector>
 
@@ -112,6 +113,7 @@ int main(int argc, char** argv) {
     Studio::WorkspaceRepository repository{"didrachma-workspace.json"};
     Didrachma::Apps::Studio::YahooHistoryLoader yahoo_history;
     Studio::EventList analysis_events;
+    std::set<std::string> highlighted_event_ids;
     using namespace Didrachma::StockChart::Render;
     const auto bars = Didrachma::Apps::Studio::demo_bars();
 
@@ -191,8 +193,6 @@ int main(int argc, char** argv) {
                         group = definition.group;
                         ImGui::SeparatorText(definition.group.c_str());
                     }
-                    const bool event_capability = definition.capability == Indicator::Capability::AnalysisEvent;
-                    ImGui::BeginDisabled(event_capability);
                     if (ImGui::Selectable(definition.display_name.c_str())) {
                         selected_instance = Didrachma::Apps::Studio::add_indicator(*document, definition);
                         std::snprintf(instance_name, sizeof(instance_name), "%s", definition.display_name.c_str());
@@ -200,9 +200,6 @@ int main(int argc, char** argv) {
                         if (view != views.end())
                             update_geometry(*view, *document, analyzer, &analysis_events);
                     }
-                    ImGui::EndDisabled();
-                    if (event_capability && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                        ImGui::SetTooltip("Analysis/event capability; not a continuous chart study");
                 }
             } else
                 ImGui::TextDisabled("Select a StockChart");
@@ -329,7 +326,7 @@ int main(int argc, char** argv) {
 
         if (show_events)
             if (const auto* selected = Didrachma::Apps::Studio::draw_event_panel(
-                    analysis_events, workspace.selected_chart(), &show_events)) {
+                    analysis_events, workspace.selected_chart(), highlighted_event_ids, &show_events)) {
                 if (auto* document = workspace.selected_chart()) {
                     const auto navigation = Studio::navigate_to_event(*document, *selected, range);
                     const auto view = std::ranges::find(views, document->id(), &ChartView::id);
@@ -452,22 +449,31 @@ int main(int argc, char** argv) {
                 draw_list->AddLine({image_minimum.x, image_minimum.y + static_cast<float>(panes.separate_splitter_y)},
                                    {image_maximum.x, image_minimum.y + static_cast<float>(panes.separate_splitter_y)},
                                    IM_COL32(110, 120, 145, 255), 2.0F);
-            if (document->selected_event_id())
-                if (const auto* event = analysis_events.find(*document->selected_event_id())) {
-                    const auto duration = view.visible_range.end - view.visible_range.begin;
-                    const auto x_at = [&](Timestamp timestamp) {
-                        const auto offset = timestamp - view.visible_range.begin;
-                        return image_minimum.x + view.plot_width * static_cast<float>(offset.count()) /
-                                                     static_cast<float>(duration.count());
-                    };
-                    const auto first = x_at(event->start);
-                    if (event->end)
-                        draw_list->AddRectFilled({first, image_minimum.y}, {x_at(*event->end), image_maximum.y},
-                                                 IM_COL32(255, 195, 64, 35));
-                    else
-                        draw_list->AddLine({first, image_minimum.y}, {first, image_maximum.y},
-                                           IM_COL32(255, 195, 64, 255), 2.0F);
-                }
+            if (view.has_visible_geometry) {
+                const Size price_size{view.plot_width, pane_content_height(panes.price_content_height)};
+                const CoordinateMapper selection_mapper{view.visible_range, view.price_range, price_size,
+                                                        static_cast<float>(pane_content_top(panes.price_top))};
+                for (const auto& event_id : highlighted_event_ids)
+                    if (const auto* event = analysis_events.find(event_id);
+                        event && event->chart_id == document->id()) {
+                        if (event->end) {
+                            const auto duration = view.visible_range.end - view.visible_range.begin;
+                            const auto x_at = [&](Timestamp timestamp) {
+                                const auto offset = timestamp - view.visible_range.begin;
+                                return image_minimum.x + view.plot_width * static_cast<float>(offset.count()) /
+                                                             static_cast<float>(duration.count());
+                            };
+                            draw_list->AddRectFilled({x_at(event->start), image_minimum.y},
+                                                     {x_at(*event->end), image_maximum.y}, IM_COL32(255, 195, 64, 35));
+                        } else
+                            for (const auto& segment :
+                                 build_event_selection_line(event->start, view.bars, selection_mapper, size.y))
+                                draw_list->AddLine(
+                                    {image_minimum.x + segment.first.x, image_minimum.y + segment.first.y},
+                                    {image_minimum.x + segment.second.x, image_minimum.y + segment.second.y},
+                                    IM_COL32(255, 195, 64, 255), 2.0F);
+                    }
+            }
             Didrachma::Apps::Studio::draw_chart_axes(view, image_minimum, image_maximum);
             if (Didrachma::Apps::Studio::draw_standalone_indicator_tabs(view, *document, image_minimum))
                 update_geometry(view, *document, analyzer, &analysis_events);

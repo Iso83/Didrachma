@@ -76,6 +76,8 @@ int test_catalog_metadata_and_visuals() {
     const auto& macd = *find("macd");
     CPPTEST_ASSERT(macd.outputs.size() == 3 && macd.parameters.size() == 3);
     CPPTEST_ASSERT(find("cdlengulfing")->capability == Capability::AnalysisEvent);
+    CPPTEST_ASSERT(find("cdldoji")->pane == PaneHint::PriceOverlay);
+    CPPTEST_ASSERT(find("cdldoji")->outputs[0].visual == VisualKind::Marker);
     return 0;
 }
 
@@ -126,6 +128,20 @@ int test_configuration_and_instance_cache_identity() {
     CPPTEST_ASSERT(other.result.revision == 1);
     const auto first_again = analyzer.calculate({first, input, 1, std::nullopt});
     CPPTEST_ASSERT(first_again.recalculation == RecalculationKind::None);
+    return 0;
+}
+
+int test_same_revision_with_replaced_input_cannot_return_stale_cache() {
+    TaLib::Analyzer analyzer;
+    auto input = bars({1, 2, 3, 4, 5});
+    const auto configured = instance("sma");
+    const auto initial = analyzer.calculate({configured, input, 1, std::nullopt});
+    input.back().close = input.back().open = input.back().high = input.back().low = 50;
+    const auto replaced = analyzer.calculate({configured, input, 1, std::nullopt});
+    CPPTEST_ASSERT(replaced.recalculation == RecalculationKind::Full);
+    CPPTEST_ASSERT(replaced.result.revision == initial.result.revision + 1);
+    CPPTEST_ASSERT(
+        !near(replaced.result.outputs[0].samples.back().value, initial.result.outputs[0].samples.back().value));
     return 0;
 }
 
@@ -252,6 +268,48 @@ int test_generic_multi_output_and_parameters() {
     return 0;
 }
 
+int test_pattern_recognition_fixtures_and_optional_parameter() {
+    TaLib::Analyzer analyzer;
+    const auto catalog = analyzer.catalog();
+    const auto abandoned = std::ranges::find(catalog, std::string{"cdlabandonedbaby"}, &Definition::id);
+    CPPTEST_ASSERT(abandoned != catalog.end());
+    CPPTEST_ASSERT(std::ranges::any_of(abandoned->parameters,
+                                       [](const auto& parameter) { return parameter.id == "penetration"; }));
+
+    auto fixture = bars({10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10});
+    for (auto& bar : fixture) {
+        bar.open = 9.5;
+        bar.high = 10.5;
+        bar.low = 9.0;
+        bar.close = 10.0;
+    }
+    fixture[fixture.size() - 2].open = 12;
+    fixture[fixture.size() - 2].high = 12;
+    fixture[fixture.size() - 2].low = 9;
+    fixture[fixture.size() - 2].close = 9;
+    fixture.back().open = 8;
+    fixture.back().high = 13;
+    fixture.back().low = 8;
+    fixture.back().close = 13;
+    const Instance bullish{"bull", "cdlengulfing", true, {}};
+    const auto bull = analyzer.calculate({bullish, fixture, 1, std::nullopt});
+    CPPTEST_ASSERT(bull.result.state == CalculationState::Ready);
+    CPPTEST_ASSERT(bull.result.outputs[0].samples.back().value > 0);
+
+    fixture[fixture.size() - 2].open = 8;
+    fixture[fixture.size() - 2].high = 12;
+    fixture[fixture.size() - 2].low = 8;
+    fixture[fixture.size() - 2].close = 12;
+    fixture.back().open = 13;
+    fixture.back().high = 13;
+    fixture.back().low = 7;
+    fixture.back().close = 7;
+    const Instance bearish{"bear", "cdlengulfing", true, {}};
+    const auto bear = analyzer.calculate({bearish, fixture, 2, std::nullopt});
+    CPPTEST_ASSERT(bear.result.outputs[0].samples.back().value < 0);
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_catalog_metadata_and_visuals);
     CPPTEST_RUN(test_sma_alignment_gaps_and_state);
@@ -259,8 +317,10 @@ int main() {
     CPPTEST_RUN(test_additional_moving_average_fixtures);
     CPPTEST_RUN(test_errors_insufficient_history_and_tail);
     CPPTEST_RUN(test_configuration_and_instance_cache_identity);
+    CPPTEST_RUN(test_same_revision_with_replaced_input_cannot_return_stale_cache);
     CPPTEST_RUN(test_update_modes_and_state_revisions);
     CPPTEST_RUN(test_expanded_family_fixtures_and_inputs);
     CPPTEST_RUN(test_generic_multi_output_and_parameters);
+    CPPTEST_RUN(test_pattern_recognition_fixtures_and_optional_parameter);
     return 0;
 }

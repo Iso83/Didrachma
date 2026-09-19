@@ -1,4 +1,5 @@
 #include <Didrachma/analysis/core/condition/BandBreakout.h>
+#include <Didrachma/analysis/core/condition/Pattern.h>
 #include <Didrachma/analysis/core/condition/PriceCross.h>
 #include <Didrachma/studio/core/Events.h>
 #include <algorithm>
@@ -33,7 +34,8 @@ void EventList::replace(std::string chart_id, std::string source_instance_id, st
         return event.chart_id == chart_id && event.source_instance_id == source_instance_id;
     });
     for (auto event : events) {
-        event.id = chart_id + ":" + source_instance_id + ":" + event.id;
+        if (event.chart_id.empty())
+            event.id = chart_id + ":" + source_instance_id + ":" + event.id;
         event.chart_id = chart_id;
         event.source_instance_id = source_instance_id;
         event.source_name = source_name;
@@ -93,7 +95,14 @@ void ConditionBindingRegistry::evaluate(const StockChart::Core::Document& docume
             entry.cached_result->state == Analysis::Core::Indicator::CalculationState::Ready) {
             const auto definition = std::ranges::find(definitions, entry.instance.definition_id,
                                                       &Analysis::Core::Indicator::Definition::id);
-            if (definition != definitions.end() && m_enabled.at("price-cross")) {
+            if (definition != definitions.end() &&
+                definition->capability == Analysis::Core::Indicator::Capability::AnalysisEvent)
+                found = Analysis::Core::Condition::extract_pattern_events(
+                    *definition, entry.instance, *entry.cached_result, bars,
+                    {document.id(), entry.name, document.series()});
+            if (definition != definitions.end() && found.empty() &&
+                definition->capability != Analysis::Core::Indicator::Capability::AnalysisEvent &&
+                m_enabled.at("price-cross")) {
                 const auto reference =
                     std::ranges::find(definition->outputs, Analysis::Core::Indicator::OutputRole::PriceReference,
                                       &Analysis::Core::Indicator::OutputDefinition::role);

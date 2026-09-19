@@ -5,6 +5,7 @@
 #include <Didrachma/analysis/core/indicator/Validation.h>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <ta_abstract.h>
 #include <ta_libc.h>
@@ -13,6 +14,26 @@ using namespace Didrachma::Analysis::Core::Indicator;
 
 namespace Didrachma::Analysis::Adapters::TaLib {
 namespace Intern {
+std::uint64_t input_fingerprint(std::span<const Market::Core::Series::Bar> bars) {
+    std::uint64_t value = 1469598103934665603ULL;
+    const auto append = [&](std::uint64_t item) {
+        value ^= item;
+        value *= 1099511628211ULL;
+    };
+    for (const auto& bar : bars) {
+        append(static_cast<std::uint64_t>(bar.open_time.time_since_epoch().count()));
+        append(bar.close_time ? static_cast<std::uint64_t>(bar.close_time->time_since_epoch().count()) : 0);
+        for (const auto number : {bar.open, bar.high, bar.low, bar.close, bar.volume}) {
+            std::uint64_t bits{};
+            static_assert(sizeof(bits) == sizeof(number));
+            std::memcpy(&bits, &number, sizeof(bits));
+            append(bits);
+        }
+        append(static_cast<std::uint64_t>(bar.state));
+    }
+    return value;
+}
+
 void merge(OutputSeries& destination, OutputSeries calculated) {
     if (calculated.samples.empty())
         return;
@@ -73,6 +94,7 @@ public:
         std::size_t input_size{};
         std::string definition_id;
         std::map<std::string, ParameterValue> parameters;
+        std::uint64_t input_fingerprint{};
     };
     std::map<std::string, Cache> instances;
 };
@@ -92,9 +114,11 @@ std::vector<Definition> Analyzer::catalog() const {
 CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
     Intern::Runtime::instance();
     auto& cache = m_impl->instances[request.instance.id];
+    const auto input_fingerprint = Intern::input_fingerprint(request.bars);
     const bool same_configuration =
         request.instance.definition_id == cache.definition_id && request.instance.parameters == cache.parameters;
-    if (same_configuration && request.input_revision == cache.result.input_revision)
+    if (same_configuration && request.input_revision == cache.result.input_revision &&
+        input_fingerprint == cache.input_fingerprint)
         return {cache.result, RecalculationKind::None};
 
     auto publish = [&](Result result, RecalculationKind mode) {
@@ -103,6 +127,7 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
         cache.input_size = request.bars.size();
         cache.definition_id = request.instance.definition_id;
         cache.parameters = request.instance.parameters;
+        cache.input_fingerprint = input_fingerprint;
         return CalculationOutcome{std::move(result), mode};
     };
 

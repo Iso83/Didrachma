@@ -12,12 +12,14 @@ enum class PaneHint { PriceOverlay, Volume, Separate };
 enum class RangeHint { Derived, Fixed };
 enum class OutputRole { Value, PriceReference, UpperBand, MiddleBand, LowerBand };
 enum class Capability { ContinuousStudy, AnalysisEvent };
+enum class EventDirection { Signed, Neutral };
 
 struct OutputDefinition {
     std::string id;
     std::string display_name;
     VisualKind visual{VisualKind::Line};
     OutputRole role{OutputRole::Value};
+    EventDirection event_direction{EventDirection::Signed};
 };
 
 struct Definition {

@@ -100,10 +100,30 @@ int test_capture_and_atomic_replacement() {
     return 0;
 }
 
+int test_pattern_instance_and_marker_round_trip() {
+    auto source = chart("patterns");
+    const auto pattern = source.add_indicator("cdldarkcloudcover", {{"penetration", 0.35}});
+    source.set_indicator_name(pattern, "Cloud 35%");
+    source.set_indicator_enabled(pattern, false);
+    source.add_layer(LayerKind::Marker, {{pattern, "value"}}, {{1.0F, 0.78F, 0.18F, 1.0F}, true, 2.0F, 0.2F});
+    ProfileCollection profiles;
+    CPPTEST_ASSERT(!profiles.add(capture_profile(source, "Patterns")));
+    const auto decoded = deserialize_profiles(serialize_profiles(profiles));
+    CPPTEST_ASSERT(std::holds_alternative<ProfileCollection>(decoded));
+    auto target = chart("restored");
+    CPPTEST_ASSERT(!apply_profile(*std::get<ProfileCollection>(decoded).find("Patterns"), target));
+    CPPTEST_ASSERT(target.indicators().size() == 1 && !target.indicators()[0].instance.enabled);
+    CPPTEST_ASSERT(target.indicators()[0].name == "Cloud 35%");
+    CPPTEST_ASSERT(std::get<double>(target.indicators()[0].instance.parameters.at("penetration")) == 0.35);
+    CPPTEST_ASSERT(target.layers().size() == 1 && target.layers()[0].kind == LayerKind::Marker);
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_default_validation_and_copy_on_apply);
     CPPTEST_RUN(test_versioned_serialization_round_trip_and_rejection);
     CPPTEST_RUN(test_profile_lifecycle);
     CPPTEST_RUN(test_capture_and_atomic_replacement);
+    CPPTEST_RUN(test_pattern_instance_and_marker_round_trip);
     return 0;
 }
