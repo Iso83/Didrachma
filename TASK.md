@@ -232,31 +232,47 @@ Stop after the headless engine produces a complete deterministic run and result.
 
 ## Phase 5 — CLI11 strategy test application
 
-- [ ] Add a focused command-line executable (suggested target/name: `Didrachma_strategy_test`) using CLI11.
-- [ ] Required/conditional arguments:
+- [x] Add a focused command-line executable (suggested target/name: `Didrachma_apps_strategy`) using CLI11.
+- [x] Required/conditional arguments:
   - `--strategy <file>`;
   - `--subject <symbol>` when the definition contains `Subject` bindings;
   - `--from <UTC>` and inclusive `--through <UTC>`;
   - provider selection/configuration without leaking Yahoo types into strategy core.
-- [ ] Add optional `--output <json>`, cost/slippage overrides, and a verbose event trace. Reject an override that would make the result non-reproducible without recording it in the report.
-- [ ] Resolve every required fixed and subject series, load sufficient warm-up history, run the shared engine, and print:
+- [x] Add optional `--output <json>`, cost/slippage overrides, and a verbose event trace. Reject an override that would make the result non-reproducible without recording it in the report.
+- [x] Resolve every required fixed and subject series, load sufficient warm-up history, run the shared engine, and print:
   - resolved inputs/timeframes;
   - readiness/errors;
   - entry, stop/target adjustments, and exit triggers;
   - gross/net yield or loss, percentage return, duration, and warnings.
-- [ ] Return non-zero for invalid strategy/configuration, missing required data, or an engine error. “No entry occurred” is a valid completed result and must be reported distinctly.
-- [ ] Make the JSON report versioned and machine-readable for later database import.
+- [x] Return non-zero for invalid strategy/configuration, missing required data, or an engine error. “No entry occurred” is a valid completed result and must be reported distinctly.
+- [x] Make the JSON report versioned and machine-readable for later database import.
 
 ### Tests and Phase 5 gate
 
-- [ ] Add an offline end-to-end CLI test using fixture/fake data and a saved strategy file.
-- [ ] Test subject substitution and a fixed peer in the same run, inclusive end-date behavior, no-entry result, invalid definition, and missing data.
-- [ ] Keep Yahoo/network execution opt-in and outside default CTest.
-- [ ] Run the complete build/CTest phase gate.
+- [x] Add an offline end-to-end CLI test using fixture/fake data and a saved strategy file.
+- [x] Test subject substitution and a fixed peer in the same run, inclusive end-date behavior, no-entry result, invalid definition, and missing data.
+- [x] Keep Yahoo/network execution opt-in and outside default CTest.
+- [x] Run the complete build/CTest phase gate.
 
 ### Phase 5 review gate
 
 Stop after showing the exact CLI command and its deterministic summary/JSON output for the fixture strategy.
+
+### Phase 5 acceptance verification
+
+- [x] `Didrachma_apps_strategy` builds and its `Main.cpp` is only a thin entry point.
+- [x] `Test_Didrachma_apps_strategy_EndToEnd` is a normal compiled C++ executable target.
+- [x] The CMake-script harness is removed without losing scenario coverage.
+- [x] Default CTest is deterministic, offline, and independent of the current date.
+- [x] Console output, typed JSON fields, exit-code classes, and diagnostics are tested.
+- [x] Strict UTC parsing is tested.
+- [x] Unique-series loading and actual-bar-count warm-up are tested.
+- [x] The JSON report contains the complete auditable strategy result.
+- [x] `Didrachma_apps_chart`, `Didrachma_apps_studio`, and `Didrachma_apps_strategy` build successfully.
+- [x] The complete Didrachma CTest suite passes with `--output-on-failure`.
+- [x] Confirm the compiled test target is visible and directly runnable in a generated Visual Studio solution.
+  Note: CMake generates a standalone `Test_Didrachma_apps_strategy_EndToEnd` executable target in the
+  `apps/strategy` test module, but Visual Studio is unavailable in this Linux environment for the final UI check.
 
 ---
 

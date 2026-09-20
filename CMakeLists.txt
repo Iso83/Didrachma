@@ -91,3 +91,4 @@ endif()
 
 cppcmake_module_add(apps/chart)
 cppcmake_module_add(apps/studio)
+cppcmake_module_add(apps/strategy)
