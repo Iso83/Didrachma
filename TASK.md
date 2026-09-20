@@ -194,35 +194,35 @@ Stop after cross-series conditions can be evaluated headlessly and return eviden
 
 ### Runtime lifecycle
 
-- [ ] Implement an explicit state machine at minimum covering `WaitingForEntry`, `EntryArmed`, `Running`, `Exited`, `Stopped`, and `Error`.
-- [ ] Record every transition and adjustment as a strategy event containing evaluation time, effective time, triggering rule/condition ids, old/new values, and evidence.
-- [ ] Entry conditions may be simultaneous or ordered according to their saved expression. A completed entry decision on a closed bar becomes effective at the next executable primary bar open to avoid look-ahead.
-- [ ] While running, evaluate runtime rules on every newly closed primary bar and track elapsed UTC time, closed-bar count, entry price, current price, unrealized P/L, maximum favorable excursion, and maximum adverse excursion.
-- [ ] Permit runtime rules to lower/raise the current target and tighten the protective stop. For a long run, a normal stop adjustment may not move lower; for a short run it may not move higher. If a future override policy is added, it must be explicit and audited.
-- [ ] Exit on an explicit exit condition, target hit, stop hit, user stop, or end of test range. Store the exact reason.
+- [x] Implement an explicit state machine at minimum covering `WaitingForEntry`, `EntryArmed`, `Running`, `Exited`, `Stopped`, and `Error`.
+- [x] Record every transition and adjustment as a strategy event containing evaluation time, effective time, triggering rule/condition ids, old/new values, and evidence.
+- [x] Entry conditions may be simultaneous or ordered according to their saved expression. A completed entry decision on a closed bar becomes effective at the next executable primary bar open to avoid look-ahead.
+- [x] While running, evaluate runtime rules on every newly closed primary bar and track elapsed UTC time, closed-bar count, entry price, current price, unrealized P/L, maximum favorable excursion, and maximum adverse excursion.
+- [x] Permit runtime rules to lower/raise the current target and tighten the protective stop. For a long run, a normal stop adjustment may not move lower; for a short run it may not move higher. If a future override policy is added, it must be explicit and audited.
+- [x] Exit on an explicit exit condition, target hit, stop hit, user stop, or end of test range. Store the exact reason.
 
 ### Fill and result rules
 
-- [ ] Define a deterministic fill model shared by CLI and Studio:
+- [x] Define a deterministic fill model shared by CLI and Studio:
   - condition-based entry/exit acts at the next primary bar open;
   - gap through a stop fills at the opening price, otherwise at the stop;
   - gap beyond a target fills at the opening price, otherwise at the target;
   - if stop and target are both touched within one OHLC bar and order is unknowable, use a documented conservative rule and flag the trade as ambiguous.
-- [ ] Support quantity, optional starting capital, fixed/percentage transaction costs, and configurable slippage so net yield/loss is reproducible.
-- [ ] Produce a result containing gross and net P/L, return percentage, duration, entry/exit data, drawdown/excursion, trigger counts, adjustment history, and ambiguity/warning flags.
-- [ ] A historical replay and the same sequence of live closed-bar updates must produce the same strategy events and final result.
+- [x] Support quantity, optional starting capital, fixed/percentage transaction costs, and configurable slippage so net yield/loss is reproducible.
+- [x] Produce a result containing gross and net P/L, return percentage, duration, entry/exit data, drawdown/excursion, trigger counts, adjustment history, and ambiguity/warning flags.
+- [x] A historical replay and the same sequence of live closed-bar updates must produce the same strategy events and final result.
 
 ### Chart projection
 
-- [ ] Define UI-neutral projection data for an entry marker, exit marker, and time-bounded price segments for entry, stop, and target.
-- [ ] When stop or target changes, close the previous segment and start a new one. Historical lines must show what the strategy knew at that time instead of rewriting the entire past.
+- [x] Define UI-neutral projection data for an entry marker, exit marker, and time-bounded price segments for entry, stop, and target.
+- [x] When stop or target changes, close the previous segment and start a new one. Historical lines must show what the strategy knew at that time instead of rewriting the entire past.
 
 ### Tests and Phase 4 gate
 
-- [ ] Test normal target exit, stop exit, gap exit, ambiguous OHLC bar, explicit condition exit, and end-of-range close.
-- [ ] Test the requested dynamic cases: adverse volatility lowers the target; unexpectedly favorable progress tightens the stop; later bars use the adjusted values.
-- [ ] Test long and short arithmetic, costs/slippage, duration, ROI, audit evidence, restart isolation, and replay/live equivalence.
-- [ ] Run the complete build/CTest phase gate.
+- [x] Test normal target exit, stop exit, gap exit, ambiguous OHLC bar, explicit condition exit, and end-of-range close.
+- [x] Test the requested dynamic cases: adverse volatility lowers the target; unexpectedly favorable progress tightens the stop; later bars use the adjusted values.
+- [x] Test long and short arithmetic, costs/slippage, duration, ROI, audit evidence, restart isolation, and replay/live equivalence.
+- [x] Run the complete build/CTest phase gate.
 
 ### Phase 4 review gate
 

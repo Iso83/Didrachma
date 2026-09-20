@@ -232,7 +232,8 @@ struct DataGraph::Implementation {
                    : Analysis::Core::MultiTimeframe::align_closed(values->second, time);
     }
 
-    Truth leaf(const ConditionExpression& condition, Intern::Timestamp time, Evidence& evidence) const {
+    Truth leaf(const ConditionExpression& condition, Intern::Timestamp time, Evidence& evidence,
+               std::optional<RunValues> run) const {
         evidence.condition_id = condition.id;
         if (const auto* value = std::get_if<MarketComparison>(&condition.predicate)) {
             const auto source = by_binding.find(value->series_id);
@@ -315,12 +316,35 @@ struct DataGraph::Implementation {
                        : Truth::False;
         }
 
-        evidence.detail = "condition requires strategy run state";
+        if (!run) {
+            evidence.detail = "condition requires strategy run state";
+            return Truth::Unknown;
+        }
+        if (const auto* value = std::get_if<ElapsedTimeCondition>(&condition.predicate)) {
+            evidence.value = static_cast<double>(run->elapsed.count());
+            return Intern::compare(*evidence.value, value->comparison, static_cast<double>(value->duration.count()))
+                       ? Truth::True
+                       : Truth::False;
+        }
+        if (const auto* value = std::get_if<ClosedBarCountCondition>(&condition.predicate)) {
+            evidence.value = static_cast<double>(run->closed_bars);
+            return Intern::compare(*evidence.value, value->comparison, static_cast<double>(value->count))
+                       ? Truth::True
+                       : Truth::False;
+        }
+        if (const auto* value = std::get_if<UnrealizedReturnCondition>(&condition.predicate)) {
+            const auto measured = value->kind == ReturnKind::Gain ? run->unrealized_return_percentage
+                                                                  : -run->unrealized_return_percentage;
+            evidence.value = measured;
+            return Intern::compare(measured, value->comparison, value->percentage) ? Truth::True : Truth::False;
+        }
+
+        evidence.detail = "unsupported condition";
         return Truth::Unknown;
     }
 
     Truth condition(const std::shared_ptr<ConditionExpression>& expression, Intern::Timestamp time,
-                    std::vector<Evidence>& evidence) const {
+                    std::vector<Evidence>& evidence, std::optional<RunValues> run = {}) const {
         if (!expression)
             return Truth::Unknown;
 
@@ -328,14 +352,14 @@ struct DataGraph::Implementation {
                            expression->kind == ConditionKind::Not || expression->kind == ConditionKind::Sequence;
         if (!group) {
             Evidence item;
-            item.truth = leaf(*expression, time, item);
+            item.truth = leaf(*expression, time, item, run);
             evidence.push_back(item);
             return item.truth;
         }
 
         std::vector<Truth> children;
         for (const auto& child : expression->children)
-            children.push_back(condition(child, time, evidence));
+            children.push_back(condition(child, time, evidence, run));
         if (expression->kind == ConditionKind::Not)
             return children.front() == Truth::Unknown ? Truth::Unknown
                    : children.front() == Truth::True  ? Truth::False
@@ -365,7 +389,7 @@ struct DataGraph::Implementation {
                  (expression->sequence.maximum_closed_bars && bars >= *expression->sequence.maximum_closed_bars)))
                 step = 0;
             std::vector<Evidence> ignored;
-            if (condition(expression->children[step], *bar.close_time, ignored) == Truth::True) {
+            if (condition(expression->children[step], *bar.close_time, ignored, run) == Truth::True) {
                 if (step == 0) {
                     started = *bar.close_time;
                     bars = 0;
@@ -570,5 +594,26 @@ std::vector<Evaluation> DataGraph::evaluate_entry() {
     m_implementation->cached = result;
     m_implementation->dirty_from.reset();
     return result;
+}
+
+Evaluation DataGraph::evaluate(const std::shared_ptr<ConditionExpression>& expression, Intern::Timestamp time,
+                               std::optional<RunValues> run) {
+    m_implementation->calculate();
+    Evaluation result{time};
+    result.truth = m_implementation->condition(expression, time, result.evidence, run);
+    return result;
+}
+
+std::span<const Market::Core::Series::Bar> DataGraph::primary_bars() const {
+    const auto found = m_implementation->by_binding.find(m_implementation->snapshot.definition().primary_series_id);
+    return found == m_implementation->by_binding.end()
+               ? std::span<const Market::Core::Series::Bar>{}
+               : std::span<const Market::Core::Series::Bar>{found->second->bars};
+}
+
+std::optional<double> DataGraph::indicator_value(std::string_view id, std::string_view output,
+                                                 Intern::Timestamp time) const {
+    const auto* value = m_implementation->indicator_value(id, output, time);
+    return value ? std::optional{value->value} : std::nullopt;
 }
 } // namespace Didrachma::Strategy::Core

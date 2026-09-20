@@ -27,6 +27,12 @@ struct Evaluation {
     std::vector<Evidence> evidence;
 };
 
+struct RunValues {
+    Duration elapsed{};
+    std::uint64_t closed_bars{};
+    double unrealized_return_percentage{};
+};
+
 struct BindingState {
     Readiness readiness{Readiness::Loading};
     std::string detail;
@@ -73,5 +79,10 @@ public:
     void apply(const Market::Core::Series::BarUpdate& update);
     void derive_series(std::string_view binding_id, std::string_view source_binding_id);
     [[nodiscard]] std::vector<Evaluation> evaluate_entry();
+    [[nodiscard]] Evaluation evaluate(const std::shared_ptr<ConditionExpression>&, Market::Core::Time::UtcTimestamp,
+                                      std::optional<RunValues> run = {});
+    [[nodiscard]] std::span<const Market::Core::Series::Bar> primary_bars() const;
+    [[nodiscard]] std::optional<double> indicator_value(std::string_view indicator_id, std::string_view output_id,
+                                                        Market::Core::Time::UtcTimestamp) const;
 };
 } // namespace Didrachma::Strategy::Core
