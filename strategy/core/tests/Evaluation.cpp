@@ -112,6 +112,14 @@ std::shared_ptr<ConditionExpression> cross(std::string id, std::string left, std
     return value;
 }
 
+std::shared_ptr<ConditionExpression> constant_cross(std::string id, std::string left, double right) {
+    auto value = std::make_shared<ConditionExpression>();
+    value->id = std::move(id);
+    value->kind = ConditionKind::IndicatorCross;
+    value->predicate = IndicatorCross{std::move(left), "value", {}, {}, right, CrossDirection::Above};
+    return value;
+}
+
 Definition definition() {
     Definition value;
     value.id = "phase-3";
@@ -283,25 +291,90 @@ int test_secondary_freshness_applies_to_market_indicator_cross_and_pattern_leave
     graph.set_series("primary", std::vector{bar(0, 600, 40), bar(600, 600, 70), bar(1200, 600, 80)});
     graph.set_series("peer", std::vector{bar(-85800, 86400, 50), bar(600, 600, 60)});
 
-    const auto assert_fresh_then_stale = [&](const std::shared_ptr<ConditionExpression>& condition,
+    const auto assert_fresh_then_stale = [&](const std::shared_ptr<ConditionExpression>& condition, Truth expected,
                                              std::string_view stale_detail) -> int {
         const auto fresh = graph.evaluate(condition, at(1200));
-        CPPTEST_ASSERT(fresh.truth != Truth::Unknown);
+        CPPTEST_ASSERT(fresh.truth == expected);
         CPPTEST_ASSERT(!fresh.evidence.empty() && fresh.evidence.front().source_time == at(1200));
         const auto stale = graph.evaluate(condition, at(1800));
         CPPTEST_ASSERT(stale.truth == Truth::Unknown);
         CPPTEST_ASSERT(!stale.evidence.empty() && stale.evidence.front().detail == stale_detail);
         return 0;
     };
-    CPPTEST_ASSERT(assert_fresh_then_stale(market("peer-market", "peer", 40), "input is stale") == 0);
-    CPPTEST_ASSERT(assert_fresh_then_stale(indicator("peer-indicator", "peer-value", 40), "indicator input is stale") ==
-                   0);
-    CPPTEST_ASSERT(
-        assert_fresh_then_stale(cross("stale-left", "peer-value", "primary-value"), "left cross input is stale") == 0);
-    CPPTEST_ASSERT(assert_fresh_then_stale(cross("stale-right", "primary-value", "peer-value"),
-                                           "right cross input is stale") == 0);
-    CPPTEST_ASSERT(
-        assert_fresh_then_stale(pattern("peer-pattern-occurrence", "peer-pattern"), "pattern input is stale") == 0);
+    CPPTEST_ASSERT(assert_fresh_then_stale(market("peer-market", "peer", 40), Truth::True, "input is stale") == 0);
+    CPPTEST_ASSERT(assert_fresh_then_stale(indicator("peer-indicator", "peer-value", 40), Truth::True,
+                                           "indicator input is stale") == 0);
+    CPPTEST_ASSERT(assert_fresh_then_stale(cross("stale-left", "peer-value", "primary-value"), Truth::False,
+                                           "current left cross input is stale") == 0);
+    CPPTEST_ASSERT(assert_fresh_then_stale(cross("stale-right", "primary-value", "peer-value"), Truth::True,
+                                           "current right cross input is stale") == 0);
+    CPPTEST_ASSERT(assert_fresh_then_stale(pattern("peer-pattern-occurrence", "peer-pattern"), Truth::True,
+                                           "pattern input is stale") == 0);
+    return 0;
+}
+
+int test_cross_previous_inputs_require_fresh_available_samples() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series[0].maximum_data_age = 5min;
+    model.series[3].maximum_data_age = 5min;
+    model.indicators = {{"primary-value", "primary", "identity", {}}, {"peer-value", "peer", "identity", {}}};
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.set_series("primary", std::vector{bar(0, 600, 40), bar(600, 600, 70)});
+    graph.set_series("peer", std::vector{bar(-600, 600, 50), bar(600, 600, 60)});
+
+    const auto stale_previous_left = graph.evaluate(cross("cross", "peer-value", "primary-value"), at(1200));
+    CPPTEST_ASSERT(stale_previous_left.truth == Truth::Unknown);
+    CPPTEST_ASSERT(stale_previous_left.evidence.front().detail == "previous left cross input is stale");
+
+    const auto stale_previous_right = graph.evaluate(cross("cross", "primary-value", "peer-value"), at(1200));
+    CPPTEST_ASSERT(stale_previous_right.truth == Truth::Unknown);
+    CPPTEST_ASSERT(stale_previous_right.evidence.front().detail == "previous right cross input is stale");
+
+    const auto constant_right = graph.evaluate(constant_cross("constant-cross", "primary-value", 50), at(1200));
+    CPPTEST_ASSERT(constant_right.truth == Truth::True);
+    CPPTEST_ASSERT(constant_right.evidence.front().source_time == at(1200));
+    return 0;
+}
+
+int test_cross_missing_previous_inputs_have_actionable_evidence() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series[0].maximum_data_age.reset();
+    model.series[3].maximum_data_age.reset();
+    model.indicators = {{"primary-value", "primary", "identity", {}}, {"peer-value", "peer", "identity", {}}};
+
+    DataGraph missing_left(Snapshot{model}, analyzer, "AAPL");
+    missing_left.set_series("primary", std::vector{bar(0, 600, 40), bar(600, 600, 70)});
+    missing_left.set_series("peer", std::vector{bar(600, 600, 60)});
+    const auto left = missing_left.evaluate(cross("cross", "peer-value", "primary-value"), at(1200));
+    CPPTEST_ASSERT(left.truth == Truth::Unknown);
+    CPPTEST_ASSERT(left.evidence.front().detail == "closed previous left cross input is unavailable");
+
+    DataGraph missing_right(Snapshot{model}, analyzer, "AAPL");
+    missing_right.set_series("primary", std::vector{bar(0, 600, 40), bar(600, 600, 70)});
+    missing_right.set_series("peer", std::vector{bar(600, 600, 60)});
+    const auto right = missing_right.evaluate(cross("cross", "primary-value", "peer-value"), at(1200));
+    CPPTEST_ASSERT(right.truth == Truth::Unknown);
+    CPPTEST_ASSERT(right.evidence.front().detail == "closed previous right cross input is unavailable");
+    return 0;
+}
+
+int test_fresh_cross_truth_and_source_time_are_exact() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series[3].maximum_data_age = 10min;
+    model.indicators = {{"primary-value", "primary", "identity", {}}, {"peer-value", "peer", "identity", {}}};
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.set_series("primary", std::vector{bar(0, 600, 40), bar(600, 600, 70), bar(1200, 600, 80)});
+    graph.set_series("peer", std::vector{bar(0, 600, 50), bar(600, 600, 60), bar(1200, 600, 65)});
+
+    const auto above = graph.evaluate(cross("above", "primary-value", "peer-value"), at(1200));
+    CPPTEST_ASSERT(above.truth == Truth::True);
+    CPPTEST_ASSERT(above.evidence.front().source_time == at(1200));
+    const auto not_crossing = graph.evaluate(cross("not-crossing", "primary-value", "peer-value"), at(1800));
+    CPPTEST_ASSERT(not_crossing.truth == Truth::False);
+    CPPTEST_ASSERT(not_crossing.evidence.front().source_time == at(1800));
     return 0;
 }
 
@@ -312,6 +385,9 @@ int main() {
     CPPTEST_RUN(test_provider_history_and_updates_use_provider_neutral_contracts);
     CPPTEST_RUN(test_forming_indicator_is_unknown_until_the_source_bar_closes);
     CPPTEST_RUN(test_forming_pattern_cannot_advance_sequence_and_closed_occurrence_is_consumed_once);
+    CPPTEST_RUN(test_cross_previous_inputs_require_fresh_available_samples);
+    CPPTEST_RUN(test_cross_missing_previous_inputs_have_actionable_evidence);
+    CPPTEST_RUN(test_fresh_cross_truth_and_source_time_are_exact);
     CPPTEST_RUN(test_secondary_freshness_applies_to_market_indicator_cross_and_pattern_leaves);
     return 0;
 }

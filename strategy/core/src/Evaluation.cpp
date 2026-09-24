@@ -355,22 +355,22 @@ struct DataGraph::Implementation {
                                     ? read_indicator(*value->right_indicator_id, value->right_output_id)
                                     : nullptr;
             if (!left) {
-                evidence.detail = "closed left cross input is unavailable";
+                evidence.detail = "closed current left cross input is unavailable";
                 return Truth::Unknown;
             }
 
             if (stale(value->left_indicator_id, *left, time)) {
-                evidence.detail = "left cross input is stale";
+                evidence.detail = "current left cross input is stale";
                 return Truth::Unknown;
             }
 
             if (value->right_indicator_id && !right) {
-                evidence.detail = "closed right cross input is unavailable";
+                evidence.detail = "closed current right cross input is unavailable";
                 return Truth::Unknown;
             }
 
             if (value->right_indicator_id && stale(*value->right_indicator_id, *right, time)) {
-                evidence.detail = "right cross input is stale";
+                evidence.detail = "current right cross input is stale";
                 return Truth::Unknown;
             }
 
@@ -379,15 +379,34 @@ struct DataGraph::Implementation {
             evidence.source_time = left->available_at;
             // Crossing is edge-triggered; compare with the immediately preceding strategy-clock sample.
             const auto previous = previous_clock(time);
-            if (!previous)
+            if (!previous) {
+                evidence.detail = "previous strategy clock is unavailable";
                 return Truth::Unknown;
+            }
 
             const auto* old_left = indicator_value(value->left_indicator_id, value->left_output_id, *previous);
             const auto* old_right = value->right_indicator_id
                                         ? indicator_value(*value->right_indicator_id, value->right_output_id, *previous)
                                         : nullptr;
-            if (!old_left || (value->right_indicator_id && !old_right))
+            if (!old_left) {
+                evidence.detail = "closed previous left cross input is unavailable";
                 return Truth::Unknown;
+            }
+
+            if (stale(value->left_indicator_id, *old_left, *previous)) {
+                evidence.detail = "previous left cross input is stale";
+                return Truth::Unknown;
+            }
+
+            if (value->right_indicator_id && !old_right) {
+                evidence.detail = "closed previous right cross input is unavailable";
+                return Truth::Unknown;
+            }
+
+            if (value->right_indicator_id && stale(*value->right_indicator_id, *old_right, *previous)) {
+                evidence.detail = "previous right cross input is stale";
+                return Truth::Unknown;
+            }
 
             const double old_rhs = old_right ? old_right->value : *value->constant;
             const bool above = old_left->value <= old_rhs && left->value > rhs;

@@ -301,6 +301,17 @@ the open 5R.4 gates.
 **Current next task: Gate 5R.4A only. Do not modify Studio/ImGui, Phase 6, `extern/`, or start 5R.4B/5R.4C in the same
 pass.**
 
+How to interpret the older open checkboxes while completing the trust review:
+
+- the remaining Phase 1 marker/Analysis Events observation is a user manual UI check. It does not block the backend
+  5R.4 gates, but it remains required before final acceptance;
+- the reopened Phase 3 dependency, warm-up, derived-series, dirty-tail, and combined-test items are acceptance rollups
+  for Gate 5R.4B. The closed/stale-alignment rollup is re-accepted only after 5R.4A and the final 5R.4C replay check;
+- the reopened Phase 4 replay/live-equivalence items and Phase 5 complete-report items belong to Gate 5R.4C;
+- the Visual Studio target check is manual Windows acceptance. Leave it open until it is actually observed;
+- do not run these older sections as separate phases and do not check their rollups early. The authoritative execution
+  order is the current 5R.4 gate followed by 5R.4B, then 5R.4C, then Phase 6.
+
 #### Gate 5R.1A — Correct the persisted domain contract
 
 - [x] Document and implement these separate concepts in UI-independent code:
@@ -398,10 +409,15 @@ Fix these in the three gates below. Work test-first, preserve the accepted entry
 strategy editor. At the end of each gate, update only that gate, report exact changed files and commands, and stop for
 review.
 
-#### Gate 5R.4A — Enforce closed and non-stale strategy inputs (current task)
+#### Gate 5R.4A — Enforce closed and non-stale strategy inputs (review follow-up; current task)
 
 Scope: `strategy/core` evaluation plus the smallest required analysis-core/adapter contract change. Do not change
 Runtime fill behavior, CLI presentation, Studio/ImGui, Phase 6, or `extern/`.
+
+Review of sandbox `Didrachma 240925 1447` accepted the forming indicator/pattern publication fix. The gate remains open
+because an `IndicatorCross` is calculated from four age-sensitive samples: current left/right and previous left/right.
+The implementation checks only the current samples. Missing previous samples also return `Unknown` without actionable
+evidence, and the fresh-path test accepts any non-`Unknown` result instead of proving the expected crossing truth.
 
 - [x] Add a deterministic regression test with a closed primary bar and a secondary `Forming` bar whose continuous
   indicator output would otherwise make an entry condition true. The indicator leaf must remain `Unknown` until that
@@ -410,12 +426,16 @@ Runtime fill behavior, CLI presentation, Studio/ImGui, Phase 6, or `extern/`.
   advance a sequence or arm an entry; closing it may publish exactly one usable occurrence.
 - [x] Preserve the source bar's closed/forming state when materializing indicator values. A forming sample must never be
   passed to `align_closed()` as closed and must not use its open timestamp as publication time.
-- [x] Apply the source `SeriesBinding::maximum_data_age` policy consistently to `IndicatorComparison`, both sides of
-  `IndicatorCross`, and `PatternOccurrence`. Missing, stale, or forming inputs return `Unknown` with actionable evidence.
-- [x] Add tests for stale direct-market, indicator, cross, and pattern leaves using the same secondary binding and prove
-  that fresh closed values still evaluate normally.
-- [x] Run only the affected analysis/core and strategy/core evaluation tests. Report the failing tests before the fix,
-  the passing commands after the fix, changed files, and any compatibility decision; then stop for review.
+- [x] Apply the source `SeriesBinding::maximum_data_age` policy consistently to `IndicatorComparison`,
+  `PatternOccurrence`, and every sample used by `IndicatorCross`: current left/right and previous left/right, evaluated
+  against their respective strategy-clock times. Missing, stale, or forming inputs return `Unknown` with actionable
+  evidence identifying the side and whether the current or previous sample failed.
+- [x] Complete the freshness regressions. Retain the current direct-market, indicator, pattern, current-left, and
+  current-right cases; add stale/missing previous-left and previous-right cross cases. For every fresh case assert the
+  exact expected `True` or `False` result and source time, not merely `truth != Unknown`.
+- [x] Run the affected analysis/core and strategy/core evaluation tests. Demonstrate that the new previous-sample tests
+  fail against the pre-correction implementation and pass after the fix; report exact commands, changed files, and any
+  compatibility decision, then stop for review. Do not start 5R.4B in the same pass.
 
 #### Gate 5R.4B — Repair invalidation, derivation, warm-up and readiness
 
