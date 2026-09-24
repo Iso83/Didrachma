@@ -33,6 +33,16 @@ int test_graph_diagnostics_order_and_dirty_tail() {
     CPPTEST_ASSERT(dirty.at("1h").begin == at(0));
     CPPTEST_ASSERT(dirty.at("trend").begin == at(-7200));
 
+    DependencyGraph derived;
+    derived.add({"source", NodeKind::Series, {}});
+    derived.add({"resample", NodeKind::Resampling, {"source"}, {}, std::chrono::hours{1}});
+    derived.add({"derived", NodeKind::Series, {"resample"}});
+    derived.add({"indicator", NodeKind::Indicator, {"derived"}, std::chrono::hours{2}});
+    const auto derived_dirty = derived.propagate("source", {at(3900), at(4500)});
+    CPPTEST_ASSERT(derived_dirty.at("resample").begin == at(3600));
+    CPPTEST_ASSERT(derived_dirty.at("resample").end == at(7200));
+    CPPTEST_ASSERT(derived_dirty.at("indicator").begin == at(-3600));
+
     DependencyGraph missing;
     missing.add({"condition", NodeKind::Condition, {"absent"}});
     CPPTEST_ASSERT(missing.validate()[0].message.find("missing") != std::string::npos);

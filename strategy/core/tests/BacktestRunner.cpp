@@ -23,6 +23,24 @@ public:
     }
 };
 
+class LateInsufficientAnalyzer final : public Analysis::Core::Indicator::Analyzer {
+public:
+    std::vector<Analysis::Core::Indicator::Definition> catalog() const override {
+        return {{"late", "Late", {}, {{"value", "Value"}}}};
+    }
+    std::size_t required_history(const Analysis::Core::Indicator::Instance&) const override {
+        return 1;
+    }
+    Analysis::Core::Indicator::CalculationOutcome
+    calculate(const Analysis::Core::Indicator::CalculationRequest& request) override {
+        Analysis::Core::Indicator::Result result;
+        result.input_revision = request.input_revision;
+        result.state = Analysis::Core::Indicator::CalculationState::InsufficientHistory;
+        result.required_history = 9;
+        return {result, Analysis::Core::Indicator::RecalculationKind::Full};
+    }
+};
+
 class Provider final : public Market::Core::Provider::Data {
 public:
     std::vector<Bar> bars;
@@ -181,10 +199,36 @@ int test_no_bars_in_range_and_cancellation_are_structured() {
     return 0;
 }
 
+int test_analyzer_insufficient_history_overrides_met_plan_and_loads_are_grouped() {
+    LateInsufficientAnalyzer analyzer;
+    Provider provider;
+    provider.bars = {bar(600, 98, 100, 97, 99), bar(1200, 99, 103, 98, 101), bar(1800, 102, 106, 101, 104),
+                     bar(2400, 104, 109, 103, 108), bar(3000, 108, 111, 107, 110)};
+    auto value = request();
+    value.strategy_snapshot.series.push_back(value.strategy_snapshot.series.front());
+    value.strategy_snapshot.series.back().id = "primary-copy";
+    value.strategy_snapshot.indicators = {{"late-binding", "primary-copy", "late", {}}};
+    value.strategy_snapshot.entry.condition = std::make_shared<ConditionExpression>();
+    value.strategy_snapshot.entry.condition->id = "late-condition";
+    value.strategy_snapshot.entry.condition->kind = ConditionKind::IndicatorComparison;
+    value.strategy_snapshot.entry.condition->predicate =
+        IndicatorComparison{"late-binding", "value", Comparison::Greater, 0};
+    const std::array<Market::Core::Time::Frame, 1> supported{
+        Market::Core::Time::Frame{10, Market::Core::Time::Unit::Minute}};
+    const auto outcome = BacktestRunner{analyzer}.run(value, provider, supported);
+    CPPTEST_ASSERT(provider.loads == 1);
+    CPPTEST_ASSERT(outcome.status == BacktestStatus::Failed);
+    CPPTEST_ASSERT(outcome.errors.front().code == BacktestErrorCode::InsufficientWarmup);
+    CPPTEST_ASSERT(outcome.inputs.back().state.readiness == Readiness::InsufficientHistory);
+    CPPTEST_ASSERT(outcome.inputs.back().state.required_history == 9);
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_nonzero_duration_trade_and_inclusive_range);
     CPPTEST_RUN(test_result_statuses_are_distinct);
     CPPTEST_RUN(test_structured_preparation_errors_and_capability_preflight);
     CPPTEST_RUN(test_no_bars_in_range_and_cancellation_are_structured);
+    CPPTEST_RUN(test_analyzer_insufficient_history_overrides_met_plan_and_loads_are_grouped);
     return 0;
 }

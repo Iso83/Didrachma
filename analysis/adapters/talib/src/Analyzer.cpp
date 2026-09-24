@@ -135,14 +135,15 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
         input_fingerprint == cache.input_fingerprint)
         return {cache.result, RecalculationKind::None};
 
-    auto publish = [&](Result result, RecalculationKind mode) {
+    auto publish = [&](Result result, RecalculationKind mode, std::size_t input_begin = 0, std::size_t input_count = 0,
+                       std::size_t reused_prefix = 0) {
         result.revision = cache.result.revision + 1;
         cache.result = result;
         cache.input_size = request.bars.size();
         cache.definition_id = request.instance.definition_id;
         cache.parameters = request.instance.parameters;
         cache.input_fingerprint = input_fingerprint;
-        return CalculationOutcome{std::move(result), mode};
+        return CalculationOutcome{std::move(result), mode, input_begin, input_count, reused_prefix};
     };
 
     const auto definitions = Intern::catalog();
@@ -181,7 +182,9 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
         const auto dirty = std::ranges::lower_bound(request.bars, request.dirty_range->begin, {},
                                                     &Market::Core::Series::Bar::open_time);
         const auto dirty_index = static_cast<std::size_t>(std::distance(request.bars.begin(), dirty));
-        start = dirty_index > static_cast<std::size_t>(lookback) ? dirty_index - lookback : 0;
+        start = request.dirty_range_includes_lookback
+                    ? dirty_index
+                    : (dirty_index > static_cast<std::size_t>(lookback) ? dirty_index - lookback : 0);
         mode = RecalculationKind::Tail;
     }
 
@@ -252,6 +255,13 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
                                          "TA-Lib calculation failed with code " + std::to_string(code)}},
                        mode);
 
+    std::size_t reused_prefix = 0;
+    if (mode == RecalculationKind::Tail && !calculated.empty() && !calculated.front().samples.empty() &&
+        !cache.result.outputs.empty())
+        reused_prefix = static_cast<std::size_t>(
+            std::ranges::count_if(cache.result.outputs.front().samples, [&](const auto& sample) {
+                return sample.timestamp < calculated.front().samples.front().timestamp;
+            }));
     Result result = mode == RecalculationKind::Tail ? cache.result : Result{};
     if (mode == RecalculationKind::Tail)
         for (auto& output : calculated) {
@@ -265,6 +275,6 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
     result.state = CalculationState::Ready;
     result.error.reset();
     result.required_history = static_cast<std::size_t>(lookback + 1);
-    return publish(std::move(result), mode);
+    return publish(std::move(result), mode, start, request.bars.size() - start, reused_prefix);
 }
 } // namespace Didrachma::Analysis::Adapters::TaLib

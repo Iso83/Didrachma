@@ -4,6 +4,14 @@
 #include <set>
 
 namespace Didrachma::Analysis::Core::MultiTimeframe {
+namespace Intern {
+Market::Core::Time::UtcTimestamp bucket_open(Market::Core::Time::UtcTimestamp value, std::chrono::seconds duration) {
+    const auto seconds = value.time_since_epoch().count();
+    const auto aligned = seconds - ((seconds % duration.count()) + duration.count()) % duration.count();
+    return Market::Core::Time::UtcTimestamp{std::chrono::seconds{aligned}};
+}
+} // namespace Intern
+
 const TimedValue* align_closed(std::span<const TimedValue> values, Market::Core::Time::UtcTimestamp time) {
     const TimedValue* selected{};
     for (const auto& value : values)
@@ -78,6 +86,11 @@ std::map<std::string, Market::Core::Time::Range> DependencyGraph::propagate(cons
                 continue;
 
             auto range = found->second;
+            if (node.kind == NodeKind::Resampling && node.bucket > std::chrono::seconds::zero()) {
+                range.begin = Intern::bucket_open(range.begin, node.bucket);
+                const auto last = range.end > range.begin ? range.end - std::chrono::seconds{1} : range.end;
+                range.end = Intern::bucket_open(last, node.bucket) + node.bucket;
+            }
             range.begin -= node.lookback;
             auto [position, inserted] = affected.emplace(id, range);
             if (!inserted) {

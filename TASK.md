@@ -298,8 +298,8 @@ The implementation of 5R.1A through 5R.3 exists, but the trust review below reop
 acceptance. Completed checkboxes in those earlier corrective gates describe retained implementation; they do not override
 the open 5R.4 gates.
 
-**Current next task: Gate 5R.4A only. Do not modify Studio/ImGui, Phase 6, `extern/`, or start 5R.4B/5R.4C in the same
-pass.**
+**Current next task: Gate 5R.4B only. Do not modify Runtime fills, CLI presentation, Studio/ImGui, Phase 6, `extern/`,
+or start 5R.4C in the same pass.**
 
 How to interpret the older open checkboxes while completing the trust review:
 
@@ -310,7 +310,7 @@ How to interpret the older open checkboxes while completing the trust review:
 - the reopened Phase 4 replay/live-equivalence items and Phase 5 complete-report items belong to Gate 5R.4C;
 - the Visual Studio target check is manual Windows acceptance. Leave it open until it is actually observed;
 - do not run these older sections as separate phases and do not check their rollups early. The authoritative execution
-  order is the current 5R.4 gate followed by 5R.4B, then 5R.4C, then Phase 6.
+  order is Gate 5R.4B, then 5R.4C, then Phase 6.
 
 #### Gate 5R.1A — Correct the persisted domain contract
 
@@ -409,7 +409,7 @@ Fix these in the three gates below. Work test-first, preserve the accepted entry
 strategy editor. At the end of each gate, update only that gate, report exact changed files and commands, and stop for
 review.
 
-#### Gate 5R.4A — Enforce closed and non-stale strategy inputs (review follow-up; current task)
+#### Gate 5R.4A — Enforce closed and non-stale strategy inputs (completed and reviewed 2026-09-24)
 
 Scope: `strategy/core` evaluation plus the smallest required analysis-core/adapter contract change. Do not change
 Runtime fill behavior, CLI presentation, Studio/ImGui, Phase 6, or `extern/`.
@@ -418,6 +418,11 @@ Review of sandbox `Didrachma 240925 1447` accepted the forming indicator/pattern
 because an `IndicatorCross` is calculated from four age-sensitive samples: current left/right and previous left/right.
 The implementation checks only the current samples. Missing previous samples also return `Unknown` without actionable
 evidence, and the fresh-path test accepts any non-`Unknown` result instead of proving the expected crossing truth.
+
+Review of sandbox `Didrachma finish Gate 5R.4A review corrections only` accepted the follow-up: all four cross operands
+are checked at their respective strategy-clock times, missing/stale evidence identifies current/previous and left/right,
+constant-right crosses remain supported, and exact fresh `True`/`False` paths are covered. The user confirmed CTest and
+ALL_BUILD remain green. Gate 5R.4A is accepted; do not reopen it during 5R.4B.
 
 - [x] Add a deterministic regression test with a closed primary bar and a secondary `Forming` bar whose continuous
   indicator output would otherwise make an entry condition true. The indicator leaf must remain `Unknown` until that
@@ -437,27 +442,40 @@ evidence, and the fresh-path test accepts any non-`Unknown` result instead of pr
   fail against the pre-correction implementation and pass after the fix; report exact commands, changed files, and any
   compatibility decision, then stop for review. Do not start 5R.4B in the same pass.
 
-#### Gate 5R.4B — Repair invalidation, derivation, warm-up and readiness
+#### Gate 5R.4B — Repair invalidation, derivation, warm-up and readiness (current task)
 
 Do not start this gate until 5R.4A is reviewed. Do not change Runtime fills, CLI presentation, Studio/ImGui, Phase 6, or
 `extern/`.
 
-- [ ] Make same-count replacement detection compare every decision-relevant bar field: open/close timestamp, state,
-  open, high, low, close, and volume. Determine the earliest changed timestamp and preserve an explicit dirty range.
-- [ ] Add separate regression cases for high-only, low-only, open-only, volume-only, close-time, `Backfill`, and `Reset`
-  corrections. Each incremental result must equal a fresh full replay.
-- [ ] Make derived-series relationships part of the dependency graph. A source append, forming replacement, backfill, or
-  reset must refresh the affected derived tail automatically; a one-time manual `derive_series()` call is insufficient.
-- [ ] Pass the propagated dirty range into indicator calculation and recompute only the affected dependency tail. Add
-  instrumentation/assertions proving unchanged prefixes are reused rather than merely comparing final values.
-- [ ] Register entry, explicit exit, and runtime-rule condition trees in the dependency graph. Include sequence limits
-  and rule history from all three areas in warm-up planning.
-- [ ] Replace integer-parameter lookback guessing with an analyzer-owned required-history/lookback contract. Keep
-  TA-Lib-specific discovery in the adapter, not in strategy/core.
-- [ ] Propagate analyzer `InsufficientHistory` to binding readiness and to the runner's structured
-  `InsufficientWarmup` failure. Never report such a binding as `Ready` and silently continue with `Unknown`.
-- [ ] Preserve one provider load/calculation for identical resolved keys while repairing derived inputs.
-- [ ] Run the affected analysis/core, TA-Lib adapter, strategy evaluation, and backtest-runner tests. Report commands,
+- [x] Make same-count replacement detection compare every decision-relevant bar field: open/close timestamp, state,
+  open, high, low, close, and volume. The dirty range begins at the changed source bar's `open_time`, because indicator
+  samples are keyed by `open_time`; do not begin at `close_time` and accidentally skip a zero-lookback calculation.
+  When `DataGraph::apply()` seeds a temporary `Bars` model from existing history, clear that seed/reset dirty range
+  before applying the real update so an append or small backfill does not dirty all history.
+- [x] Add separate regression cases for high-only, low-only, open-only, volume-only, close-time, state-only,
+  `ReplaceForming`, `Backfill`, and `Reset` corrections. Compare the complete incremental evaluations and indicator
+  outputs with a fresh full replay, including evidence/source timestamps, not only the final truth value.
+- [x] Make derived-series relationships real dependency-graph edges. An indicator bound to a derived series must depend
+  on the resampling result, which in turn depends on its source series; a disconnected `resampling:<id>` node is not
+  sufficient. A source append, forming replacement, backfill, or reset must automatically refresh the affected derived
+  bucket/tail after the initial `derive_series()` relationship is registered.
+- [x] Propagate source dirty ranges through resampling and indicator lookback using source-bar `open_time` semantics.
+  Pass each indicator its own affected dirty range and recompute only the required tail. Add instrumentation/assertions
+  for the reported `RecalculationKind`, dirty begin/end, calculated input slice, and unchanged-prefix reuse; equal final
+  values alone are insufficient.
+- [x] Register entry, explicit exit, and runtime-rule condition trees in the dependency graph. Warm-up planning must
+  include analyzer lookback plus the history needed to reconstruct sequences from all three areas, including both
+  `maximum_closed_bars` and `maximum_elapsed` where present.
+- [x] Use the analyzer-owned `required_history()` contract for warm-up planning; keep TA-Lib lookback discovery in the
+  adapter and remove/avoid strategy-core parameter-name or integer-value guessing. Add a nontrivial TA-Lib lookback test
+  so a coincidental integer parameter cannot satisfy the acceptance criterion.
+- [x] Propagate analyzer `InsufficientHistory` to binding readiness and to the runner's structured
+  `InsufficientWarmup` failure even when the initially planned bar count was met. Never report that binding as `Ready`
+  or silently continue with `Unknown`; add an explicit runner regression.
+- [x] Preserve one provider load for identical resolved series keys and one analyzer calculation for identical
+  calculation identities (same resolved source key, definition, parameters, and relevant input revision), while still
+  exposing results under every configured binding id. Add counters proving reuse and proving derived inputs update once.
+- [x] Run the affected analysis/core, TA-Lib adapter, strategy evaluation, and backtest-runner tests. Report commands,
   changed files, load/calculation counts, and any remaining performance risk; then stop for review.
 
 #### Gate 5R.4C — Re-accept runtime equivalence and the auditable CLI report

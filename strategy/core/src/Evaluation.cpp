@@ -118,6 +118,7 @@ struct DataGraph::Implementation {
     std::vector<Evaluation> cached;
     std::optional<Intern::Timestamp> dirty_from;
     std::optional<Market::Core::Time::Range> dirty_range;
+    std::map<std::string, Market::Core::Time::Range> node_dirty;
 
     Implementation(Snapshot value, Analysis::Core::Indicator::Analyzer& analysis, std::optional<std::string> subject)
         : snapshot(std::move(value)), analyzer(&analysis),
@@ -142,7 +143,7 @@ struct DataGraph::Implementation {
                        kind,
                        {"series:" + item.series_id},
                        Intern::frame_duration(series_binding(item.series_id)->timeframe) *
-                           static_cast<long>(indicator_history(item))});
+                           static_cast<long>(std::max<std::size_t>(indicator_history(item), 1) - 1)});
         }
         add_conditions(snapshot.definition().entry.condition);
         for (const auto& item : snapshot.definition().exits)
@@ -186,17 +187,26 @@ struct DataGraph::Implementation {
     }
 
     std::size_t required(std::string_view binding_id) const {
-        std::size_t result{1};
+        std::size_t indicator_required{1};
         for (const auto& indicator : snapshot.definition().indicators)
             if (indicator.series_id == binding_id)
-                result = std::max(result, indicator_history(indicator));
+                indicator_required = std::max(indicator_required, indicator_history(indicator));
+        std::size_t sequence_required{1};
+        const auto* binding = series_binding(binding_id);
+        const auto frame = binding ? Intern::frame_duration(binding->timeframe) : std::chrono::seconds{1};
         const auto sequence_history = [&](const auto& self,
                                           const std::shared_ptr<ConditionExpression>& condition) -> void {
             if (!condition)
                 return;
 
             if (condition->kind == ConditionKind::Sequence && condition->sequence.maximum_closed_bars)
-                result = std::max(result, static_cast<std::size_t>(*condition->sequence.maximum_closed_bars));
+                sequence_required =
+                    std::max(sequence_required, static_cast<std::size_t>(*condition->sequence.maximum_closed_bars));
+            if (condition->kind == ConditionKind::Sequence && condition->sequence.maximum_elapsed) {
+                const auto elapsed = condition->sequence.maximum_elapsed->count();
+                const auto bars = static_cast<std::size_t>((elapsed + frame.count() - 1) / frame.count());
+                sequence_required = std::max(sequence_required, bars);
+            }
             for (const auto& child : condition->children)
                 self(self, child);
         };
@@ -206,20 +216,54 @@ struct DataGraph::Implementation {
         for (const auto& item : snapshot.definition().runtime_rules)
             sequence_history(sequence_history, item.condition);
 
-        return result;
+        return indicator_required + sequence_required - 1;
+    }
+
+    void merge_dirty(const std::string& source, Market::Core::Time::Range range) {
+        for (const auto& [node, propagated] : graph.propagate(source, range)) {
+            auto [at, inserted] = node_dirty.emplace(node, propagated);
+            if (!inserted) {
+                at->second.begin = std::min(at->second.begin, propagated.begin);
+                at->second.end = std::max(at->second.end, propagated.end);
+            }
+        }
     }
 
     void calculate() {
         indicators.clear();
+        struct SharedCalculation {
+            const StoredSeries* source{};
+            std::string definition;
+            std::map<std::string, Analysis::Core::Indicator::ParameterValue> parameters;
+            std::uint64_t revision{};
+            Analysis::Core::Indicator::Result result;
+        };
+        std::vector<SharedCalculation> shared_calculations;
         for (const auto& binding : snapshot.definition().indicators) {
             const auto found = by_binding.find(binding.series_id);
             if (found == by_binding.end() || found->second->bars.empty())
                 continue;
 
-            Analysis::Core::Indicator::Instance instance{binding.id, binding.definition_id, true, binding.parameters};
-            auto outcome = analyzer->calculate({instance, found->second->bars, found->second->revision, dirty_range});
             auto& destination = indicators[binding.id];
-            destination.result = std::move(outcome.result);
+            const auto reused = std::ranges::find_if(shared_calculations, [&](const auto& item) {
+                return item.source == found->second.get() && item.definition == binding.definition_id &&
+                       item.parameters == binding.parameters && item.revision == found->second->revision;
+            });
+            if (reused != shared_calculations.end())
+                destination.result = reused->result;
+            else {
+                Analysis::Core::Indicator::Instance instance{binding.id, binding.definition_id, true,
+                                                             binding.parameters};
+                const auto dirty = node_dirty.find("indicator:" + binding.id);
+                auto outcome =
+                    analyzer->calculate({instance, found->second->bars, found->second->revision,
+                                         dirty == node_dirty.end() ? std::optional<Market::Core::Time::Range>{}
+                                                                   : std::optional{dirty->second},
+                                         dirty != node_dirty.end()});
+                destination.result = std::move(outcome.result);
+                shared_calculations.push_back({found->second.get(), binding.definition_id, binding.parameters,
+                                               found->second->revision, destination.result});
+            }
             for (const auto& output : destination.result.outputs) {
                 auto& values = destination.values[output.output_id];
                 for (const auto& sample : output.samples) {
@@ -582,14 +626,14 @@ void DataGraph::set_series(std::string_view id, std::span<const Market::Core::Se
     const auto common = std::min(found->second->bars.size(), bars.size());
     for (std::size_t index = 0; index < common; ++index)
         if (!Intern::decision_equal(found->second->bars[index], bars[index])) {
-            changed = found->second->bars[index].close_time.value_or(found->second->bars[index].open_time);
+            changed = found->second->bars[index].open_time;
             break;
         }
 
     if (!changed && common < bars.size())
-        changed = bars[common].close_time.value_or(bars[common].open_time);
+        changed = bars[common].open_time;
     if (!changed && bars.size() < found->second->bars.size())
-        changed = found->second->bars[bars.size()].close_time.value_or(found->second->bars[bars.size()].open_time);
+        changed = found->second->bars[bars.size()].open_time;
     if (changed) {
         m_implementation->dirty_from =
             m_implementation->dirty_from ? std::min(*m_implementation->dirty_from, *changed) : changed;
@@ -602,6 +646,9 @@ void DataGraph::set_series(std::string_view id, std::span<const Market::Core::Se
             m_implementation->dirty_range->end = std::max(m_implementation->dirty_range->end, range.end);
         } else
             m_implementation->dirty_range = range;
+        for (const auto& [binding_id, storage] : m_implementation->by_binding)
+            if (storage == found->second)
+                m_implementation->merge_dirty("series:" + binding_id, range);
     }
     found->second->bars.assign(bars.begin(), bars.end());
     std::ranges::stable_sort(found->second->bars, {}, &Intern::Bar::open_time);
@@ -636,6 +683,7 @@ void DataGraph::apply(const Market::Core::Series::BarUpdate& update) {
     Market::Core::Series::Bars model(update.key);
     if (!shared->second->bars.empty())
         model.apply({update.key, Market::Core::Series::BarUpdateKind::Reset, shared->second->bars});
+    model.clear_dirty_range();
     if (!model.apply(update))
         return;
 
@@ -652,6 +700,9 @@ void DataGraph::apply(const Market::Core::Series::BarUpdate& update) {
             m_implementation->dirty_range->end = std::max(m_implementation->dirty_range->end, model.dirty_range()->end);
         } else
             m_implementation->dirty_range = model.dirty_range();
+        for (const auto& [binding_id, storage] : m_implementation->by_binding)
+            if (storage == shared->second)
+                m_implementation->merge_dirty("series:" + binding_id, *model.dirty_range());
     }
     m_implementation->refresh_derived();
 }
@@ -668,17 +719,27 @@ void DataGraph::derive_series(std::string_view id, std::string_view source_id) {
         return;
 
     m_implementation->derived_from[std::string{id}] = source_id;
-    m_implementation->graph.add({"resampling:" + std::string{id},
+    const auto bucket = Intern::frame_duration(target_binding->timeframe);
+    m_implementation->graph.set({"resampling:" + std::string{id},
                                  Analysis::Core::MultiTimeframe::NodeKind::Resampling,
-                                 {"series:" + std::string{source_id}}});
+                                 {"series:" + std::string{source_id}},
+                                 {},
+                                 bucket});
+    m_implementation->graph.set({"series:" + std::string{id},
+                                 Analysis::Core::MultiTimeframe::NodeKind::Series,
+                                 {"resampling:" + std::string{id}}});
     m_implementation->refresh_derived();
     if (!target->second->bars.empty()) {
-        m_implementation->dirty_from =
-            target->second->bars.front().close_time.value_or(target->second->bars.front().open_time);
+        m_implementation->dirty_from = target->second->bars.front().open_time;
         m_implementation->dirty_range = Market::Core::Time::Range{
             *m_implementation->dirty_from,
             target->second->bars.back().close_time.value_or(target->second->bars.back().open_time) +
                 std::chrono::seconds{1}};
+        const auto source_range = Market::Core::Time::Range{
+            source->second->bars.front().open_time,
+            source->second->bars.back().close_time.value_or(source->second->bars.back().open_time) +
+                std::chrono::seconds{1}};
+        m_implementation->merge_dirty("series:" + std::string{source_id}, source_range);
     }
     for (auto& resolved : m_implementation->resolved.series)
         if (resolved.binding_id == id) {
@@ -717,6 +778,7 @@ std::vector<Evaluation> DataGraph::evaluate_entry() {
     m_implementation->cached = result;
     m_implementation->dirty_from.reset();
     m_implementation->dirty_range.reset();
+    m_implementation->node_dirty.clear();
     return result;
 }
 

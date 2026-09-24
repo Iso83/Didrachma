@@ -245,6 +245,23 @@ int test_errors_insufficient_history_and_tail() {
     CPPTEST_ASSERT(updated.recalculation == RecalculationKind::Tail);
     CPPTEST_ASSERT(updated.result.revision == initial.result.revision + 1);
     CPPTEST_ASSERT(near(updated.result.outputs[0].samples.back().value, 5.0));
+    CPPTEST_ASSERT(updated.calculated_input_begin == 2 && updated.calculated_input_count == 3);
+    CPPTEST_ASSERT(updated.reused_prefix_samples == 2);
+    return 0;
+}
+
+int test_required_history_uses_native_nontrivial_lookback() {
+    TaLib::Analyzer analyzer;
+    auto configured = instance("macd");
+    configured.parameters = {
+        {"fast_period", std::int64_t{5}}, {"slow_period", std::int64_t{13}}, {"signal_period", std::int64_t{4}}};
+    const auto required = analyzer.required_history(configured);
+    CPPTEST_ASSERT(required == 16);
+    CPPTEST_ASSERT(required != 5 && required != 13 && required != 4);
+    const auto input = bars({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
+    const auto insufficient = analyzer.calculate({configured, input, 1, std::nullopt});
+    CPPTEST_ASSERT(insufficient.result.state == CalculationState::InsufficientHistory);
+    CPPTEST_ASSERT(insufficient.result.required_history == required);
     return 0;
 }
 
@@ -316,6 +333,7 @@ int main() {
     CPPTEST_RUN(test_bands_fixture);
     CPPTEST_RUN(test_additional_moving_average_fixtures);
     CPPTEST_RUN(test_errors_insufficient_history_and_tail);
+    CPPTEST_RUN(test_required_history_uses_native_nontrivial_lookback);
     CPPTEST_RUN(test_configuration_and_instance_cache_identity);
     CPPTEST_RUN(test_same_revision_with_replaced_input_cannot_return_stale_cache);
     CPPTEST_RUN(test_update_modes_and_state_revisions);
