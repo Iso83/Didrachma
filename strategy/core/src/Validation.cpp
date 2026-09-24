@@ -212,10 +212,18 @@ std::vector<ValidationError> validate(const Definition& definition, IndicatorCat
         }
     }
 
-    validate_price(definition.entry.price, definition, catalog, "/entry/price", errors);
-    if (definition.entry.price.kind == PricePolicyKind::PercentageFromEntry)
-        error(errors, ValidationCode::InvalidPricePolicy, "/entry/price",
-              "Entry price cannot be relative to an entry that does not exist yet");
+    const auto& order = definition.entry.order;
+    if (order.kind == EntryOrderKind::Limit) {
+        if (!std::isfinite(order.limit_price) || order.limit_price <= 0)
+            error(errors, ValidationCode::InvalidEntryOrder, "/entry/order/limitPrice",
+                  "Limit price must be finite and positive");
+        if (order.validity_primary_bars == 0)
+            error(errors, ValidationCode::InvalidEntryOrder, "/entry/order/validityPrimaryBars",
+                  "Limit validity must be positive");
+    } else if (order.limit_price != 0 || order.validity_primary_bars != 0) {
+        error(errors, ValidationCode::InvalidEntryOrder, "/entry/order",
+              "Next-bar-open orders cannot contain limit fields");
+    }
     validate_price(definition.stop_loss, definition, catalog, "/stopLoss", errors);
     validate_price(definition.target, definition, catalog, "/target", errors);
     std::unordered_set<const ConditionExpression*> visiting, visited;

@@ -33,6 +33,8 @@ const char* event_name(StrategyEventKind value) {
             return "entry_armed";
         case StrategyEventKind::EntryFilled:
             return "entry_filled";
+        case StrategyEventKind::EntryExpired:
+            return "entry_expired";
         case StrategyEventKind::StopAdjusted:
             return "stop_adjusted";
         case StrategyEventKind::TargetAdjusted:
@@ -92,6 +94,54 @@ const char* readiness_name(Readiness value) {
     return "provider_error";
 }
 
+const char* orchestration_name(BacktestStatus value) {
+    switch (value) {
+        case BacktestStatus::Preparing:
+            return "preparing";
+        case BacktestStatus::Ready:
+            return "ready";
+        case BacktestStatus::Executing:
+            return "executing";
+        case BacktestStatus::Completed:
+            return "completed";
+        case BacktestStatus::Failed:
+            return "failed";
+        case BacktestStatus::Cancelled:
+            return "cancelled";
+    }
+    return "failed";
+}
+
+const char* outcome_name(BacktestResultStatus value) {
+    switch (value) {
+        case BacktestResultStatus::NoSignal:
+            return "no_signal";
+        case BacktestResultStatus::SignalNotFilled:
+            return "signal_not_filled";
+        case BacktestResultStatus::OpenPositionClosedAtEnd:
+            return "open_position_closed_at_end";
+        case BacktestResultStatus::Exited:
+            return "exited";
+        case BacktestResultStatus::Failed:
+            return "failed";
+    }
+    return "failed";
+}
+
+const char* entry_name(EntryStatus value) {
+    switch (value) {
+        case EntryStatus::NoSignal:
+            return "no_signal";
+        case EntryStatus::AwaitingFill:
+            return "awaiting_fill";
+        case EntryStatus::Expired:
+            return "expired";
+        case EntryStatus::Filled:
+            return "filled";
+    }
+    return "no_signal";
+}
+
 const char* truth_name(Truth value) {
     switch (value) {
         case Truth::False:
@@ -138,19 +188,19 @@ std::string frame_name(Market::Core::Time::Frame frame) {
 }
 } // namespace
 
-nlohmann::json make_report(const Definition& definition, const DataGraph& graph, const RunResult& result,
-                           const ReportContext& context) {
+nlohmann::json make_report(const BacktestOutcome& outcome, const ReportContext& context) {
+    const auto& definition = outcome.request.strategy_snapshot;
+    const auto& result = *outcome.result;
     nlohmann::json inputs = nlohmann::json::array();
-    for (const auto& item : graph.resolution().series) {
-        const auto readiness = graph.state(item.binding_id);
-        inputs.push_back({{"bindingId", item.binding_id},
-                          {"providerId", item.key.provider},
-                          {"instrument", item.key.instrument},
-                          {"timeframe", frame_name(item.key.timeframe)},
-                          {"readiness", readiness_name(readiness.readiness)},
-                          {"detail", readiness.detail},
-                          {"availableHistory", readiness.available_history},
-                          {"requiredHistory", readiness.required_history}});
+    for (const auto& item : outcome.inputs) {
+        inputs.push_back({{"bindingId", item.series.binding_id},
+                          {"providerId", item.series.key.provider},
+                          {"instrument", item.series.key.instrument},
+                          {"timeframe", frame_name(item.series.key.timeframe)},
+                          {"readiness", readiness_name(item.state.readiness)},
+                          {"detail", item.state.detail},
+                          {"availableHistory", item.state.available_history},
+                          {"requiredHistory", item.state.required_history}});
     }
 
     nlohmann::json events = nlohmann::json::array();
@@ -181,14 +231,22 @@ nlohmann::json make_report(const Definition& definition, const DataGraph& graph,
                             {"end", format_utc(segment.end)},
                             {"price", segment.price}});
 
-    const auto status = !result.entry_time && result.state != RunState::Error ? "no_entry" : state_name(result.state);
-    return {{"reportFormatVersion", 1},
+    const auto status = outcome.result_status == BacktestResultStatus::NoSignal          ? "no_entry"
+                        : outcome.result_status == BacktestResultStatus::SignalNotFilled ? "signal_not_filled"
+                        : outcome.result_status == BacktestResultStatus::OpenPositionClosedAtEnd
+                            ? "open_position_closed_at_end"
+                            : state_name(result.state);
+    return {{"reportFormatVersion", 2},
             {"strategy", {{"id", definition.id}, {"version", definition.version}, {"file", context.strategy_file}}},
             {"request",
              {{"provider", context.provider},
+              {"providerConfiguration", outcome.request.provider.values},
               {"subject", context.subject},
               {"from", format_utc(context.from)},
-              {"throughInclusive", format_utc(context.through)}}},
+              {"throughInclusive", format_utc(context.through)},
+              {"fillModelVersion", outcome.request.fill_model_version},
+              {"effectiveWarmupBegin",
+               outcome.warmup_begin ? nlohmann::json(format_utc(*outcome.warmup_begin)) : nlohmann::json{}}}},
             {"execution",
              {{"quantity", context.costs.quantity},
               {"startingCapital", context.costs.starting_capital},
@@ -197,9 +255,12 @@ nlohmann::json make_report(const Definition& definition, const DataGraph& graph,
               {"slippagePercentage", context.costs.slippage_percentage},
               {"overridden", context.costs_overridden}}},
             {"inputs", std::move(inputs)},
+            {"orchestrationStatus", orchestration_name(outcome.status)},
+            {"outcomeStatus", outcome_name(outcome.result_status)},
             {"result",
              {{"status", status},
               {"state", state_name(result.state)},
+              {"entryStatus", entry_name(result.entry_status)},
               {"exitReason", exit_name(result.exit_reason)},
               {"entryTime", result.entry_time ? nlohmann::json(format_utc(*result.entry_time)) : nlohmann::json{}},
               {"exitTime", result.exit_time ? nlohmann::json(format_utc(*result.exit_time)) : nlohmann::json{}},

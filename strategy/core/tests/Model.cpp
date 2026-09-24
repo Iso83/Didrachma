@@ -1,6 +1,8 @@
 #include "Fixture.h"
 #include "TestAssert.h"
 
+#include <Didrachma/strategy/core/Backtest.h>
+
 using namespace Didrachma::Strategy::Core;
 
 int test_model_covers_subject_fixed_multitimeframe_and_ordered_sequence() {
@@ -25,8 +27,26 @@ int test_snapshot_is_deep_and_immutable_from_definition_edits() {
     return 0;
 }
 
+int test_backtest_contract_separates_reusable_and_resolved_state() {
+    BacktestRequest request{Testing::representative(),
+                            "AAPL",
+                            Didrachma::Market::Core::Time::UtcTimestamp{Duration{100}},
+                            Didrachma::Market::Core::Time::UtcTimestamp{Duration{200}},
+                            {"fixture", {}},
+                            {},
+                            1};
+    const auto resolution = resolve(request.strategy_snapshot, request.subject_symbol);
+    CPPTEST_ASSERT(request.strategy_snapshot.series[0].instrument.symbol.empty());
+    CPPTEST_ASSERT(resolution.errors.empty() && resolution.series[0].key.instrument == "AAPL");
+    BacktestOutcome outcome{request};
+    outcome.inputs.push_back({resolution.series[0], {Readiness::Ready, {}, 20, 20}});
+    CPPTEST_ASSERT(outcome.request.subject_symbol == "AAPL" && outcome.inputs[0].state.readiness == Readiness::Ready);
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_model_covers_subject_fixed_multitimeframe_and_ordered_sequence);
     CPPTEST_RUN(test_snapshot_is_deep_and_immutable_from_definition_edits);
+    CPPTEST_RUN(test_backtest_contract_separates_reusable_and_resolved_state);
     return 0;
 }

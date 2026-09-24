@@ -7,6 +7,7 @@ enum class RunState { WaitingForEntry, EntryArmed, Running, Exited, Stopped, Err
 enum class StrategyEventKind {
     EntryArmed,
     EntryFilled,
+    EntryExpired,
     StopAdjusted,
     TargetAdjusted,
     ExitArmed,
@@ -14,6 +15,9 @@ enum class StrategyEventKind {
     RunStopped,
     Error
 };
+// Separates an absent signal from a signal that could not yet (or no longer can)
+// fill within its persisted order policy.
+enum class EntryStatus { NoSignal, AwaitingFill, Expired, Filled };
 enum class ExitReason { None, Condition, RuntimeRule, StopLoss, Target, UserStop, EndOfRange, Error };
 enum class ProjectionKind { EntryMarker, ExitMarker, EntryPrice, StopPrice, TargetPrice };
 
@@ -57,6 +61,7 @@ struct Projection {
 
 struct RunResult {
     RunState state{RunState::WaitingForEntry};
+    EntryStatus entry_status{EntryStatus::NoSignal};
     ExitReason exit_reason{ExitReason::None};
     std::optional<Market::Core::Time::UtcTimestamp> entry_time;
     std::optional<Market::Core::Time::UtcTimestamp> exit_time;
@@ -76,6 +81,9 @@ struct RunResult {
     std::map<std::string, std::uint64_t> trigger_counts;
     std::vector<StrategyEvent> events;
     Projection projection;
+    // Same-bar OHLC ordering is unknowable. The engine ignores a target-only
+    // touch after an intrabar limit fill and uses the stop when adverse and
+    // favorable levels both may have followed that fill.
     bool ambiguous_fill{};
     std::vector<std::string> warnings;
 };

@@ -21,6 +21,8 @@ struct Engine::Implementation {
     std::optional<double> target_price;
     std::optional<Intern::Timestamp> last_time;
     std::optional<Intern::Timestamp> armed_time;
+    std::uint64_t entry_attempted_bars{};
+    bool entry_filled_by_intrabar_touch{};
     ExitReason pending_exit{ExitReason::None};
     std::vector<std::string> pending_ids;
     std::vector<Evidence> pending_evidence;
@@ -100,11 +102,13 @@ struct Engine::Implementation {
         result.projection.segments.push_back({kind, time, time, price});
     }
 
-    void enter(const Intern::Bar& bar) {
+    void enter(const Intern::Bar& bar, double raw_price, bool intrabar_touch, std::string detail) {
         const auto buying = definition().direction == Direction::Long;
         result.entry_time = bar.open_time;
-        result.entry_price = slipped(bar.open, buying);
+        result.entry_price = slipped(raw_price, buying);
         result.current_price = *result.entry_price;
+        result.entry_status = EntryStatus::Filled;
+        entry_filled_by_intrabar_touch = intrabar_touch;
         stop_price = policy(definition().stop_loss, bar.open_time, false);
         target_price = policy(definition().target, bar.open_time, true);
         if (!stop_price || !target_price) {
@@ -116,7 +120,33 @@ struct Engine::Implementation {
         open_segments(bar.open_time);
         event(StrategyEventKind::EntryFilled, *armed_time, bar.open_time, RunState::EntryArmed, RunState::Running,
               {definition().entry.condition->id}, {}, *result.entry_price, std::move(pending_evidence),
-              "entry filled at next primary bar open");
+              std::move(detail));
+    }
+
+    bool try_enter(const Intern::Bar& bar) {
+        const auto& order = definition().entry.order;
+        if (order.kind == EntryOrderKind::NextBarOpen) {
+            enter(bar, bar.open, false, "entry filled at next primary bar open");
+            return true;
+        }
+
+        ++entry_attempted_bars;
+        const bool long_run = definition().direction == Direction::Long;
+        const bool favorable_open = long_run ? bar.open <= order.limit_price : bar.open >= order.limit_price;
+        const bool touched = long_run ? bar.low <= order.limit_price : bar.high >= order.limit_price;
+        if (favorable_open || touched) {
+            enter(bar, favorable_open ? bar.open : order.limit_price, !favorable_open,
+                  favorable_open ? "limit entry filled at favorable bar open" : "limit entry price touched");
+            return true;
+        }
+
+        if (entry_attempted_bars >= order.validity_primary_bars) {
+            result.entry_status = EntryStatus::Expired;
+            event(StrategyEventKind::EntryExpired, *armed_time, *bar.close_time, RunState::EntryArmed,
+                  RunState::WaitingForEntry, {definition().entry.condition->id}, {}, {}, std::move(pending_evidence),
+                  "limit entry expired after " + std::to_string(entry_attempted_bars) + " primary bars");
+        }
+        return false;
     }
 
     void exit(Intern::Timestamp evaluated, Intern::Timestamp effective, double raw_price, ExitReason reason,
@@ -154,14 +184,30 @@ struct Engine::Implementation {
         const bool target_gap = long_run ? bar.open >= *target_price : bar.open <= *target_price;
         const bool stop_hit = stop_gap || (long_run ? bar.low <= *stop_price : bar.high >= *stop_price);
         const bool target_hit = target_gap || (long_run ? bar.high >= *target_price : bar.low <= *target_price);
-        if (!stop_hit && !target_hit)
+        if (!stop_hit && !target_hit) {
+            entry_filled_by_intrabar_touch = false;
             return false;
+        }
+
+        if (entry_filled_by_intrabar_touch) {
+            result.ambiguous_fill = true;
+            if (!stop_hit && target_hit) {
+                result.warnings.push_back(
+                    "limit entry and target touched in one OHLC bar; target ignored because event order is unknown");
+                entry_filled_by_intrabar_touch = false;
+                return false;
+            }
+
+            result.warnings.push_back(
+                "limit entry and stop/target touched in one OHLC bar; conservative stop fill used");
+        }
 
         if (stop_hit && target_hit) {
             result.ambiguous_fill = true;
-            result.warnings.push_back("stop and target touched in one OHLC bar; conservative stop fill used");
+            if (!entry_filled_by_intrabar_touch)
+                result.warnings.push_back("stop and target touched in one OHLC bar; conservative stop fill used");
         }
-        const bool use_stop = stop_hit;
+        const bool use_stop = stop_hit || entry_filled_by_intrabar_touch;
         const auto gap = use_stop ? stop_gap : target_gap;
         const auto price = gap ? bar.open : (use_stop ? *stop_price : *target_price);
         exit(bar.open_time, bar.open_time, price, use_stop ? ExitReason::StopLoss : ExitReason::Target,
@@ -245,8 +291,9 @@ struct Engine::Implementation {
 
         last_time = *bar.close_time;
 
-        if (result.state == RunState::EntryArmed)
-            enter(bar);
+        if (result.state == RunState::EntryArmed && !try_enter(bar))
+            return;
+
         if (result.state == RunState::Running && pending_exit != ExitReason::None) {
             exit(*armed_time, bar.open_time, bar.open, pending_exit, std::move(pending_ids),
                  std::move(pending_evidence), "condition exit filled at next primary bar open");
@@ -283,6 +330,8 @@ struct Engine::Implementation {
         const auto evaluation = graph->evaluate(definition().entry.condition, *bar.close_time);
         if (evaluation.truth == Truth::True) {
             armed_time = *bar.close_time;
+            entry_attempted_bars = 0;
+            result.entry_status = EntryStatus::AwaitingFill;
             pending_evidence = evaluation.evidence;
             event(StrategyEventKind::EntryArmed, *bar.close_time, *bar.close_time, RunState::WaitingForEntry,
                   RunState::EntryArmed, {definition().entry.condition->id}, {}, {}, evaluation.evidence,

@@ -124,9 +124,17 @@ struct PricePolicy {
     double offset{};
 };
 
+enum class EntryOrderKind { NextBarOpen, Limit };
+
+struct EntryOrder {
+    EntryOrderKind kind{EntryOrderKind::NextBarOpen};
+    double limit_price{};
+    std::uint64_t validity_primary_bars{};
+};
+
 struct EntryPlan {
     std::shared_ptr<ConditionExpression> condition;
-    PricePolicy price;
+    EntryOrder order;
 };
 
 struct ExitCondition {

@@ -1,7 +1,7 @@
 #include "Fixture.h"
 #include "TestAssert.h"
 
-#include <Didrachma/strategy/core/Validation.h>
+#include <Didrachma/strategy/core/Backtest.h>
 #include <algorithm>
 
 using namespace Didrachma::Strategy::Core;
@@ -59,10 +59,44 @@ int test_sequence_timeout_and_out_of_order_are_explicit_model_state() {
     return 0;
 }
 
+int test_entry_order_validation() {
+    auto value = Testing::representative();
+    value.entry.order = {EntryOrderKind::NextBarOpen};
+    CPPTEST_ASSERT(validate(value, Testing::catalog()).empty());
+    value.entry.order = {EntryOrderKind::Limit, 101.25, 3};
+    CPPTEST_ASSERT(validate(value, Testing::catalog()).empty());
+    value.entry.order.validity_primary_bars = 0;
+    CPPTEST_ASSERT(has(validate(value, Testing::catalog()), ValidationCode::InvalidEntryOrder));
+    value.entry.order = {EntryOrderKind::NextBarOpen, 100.0, 1};
+    CPPTEST_ASSERT(has(validate(value, Testing::catalog()), ValidationCode::InvalidEntryOrder));
+    return 0;
+}
+
+int test_backtest_request_validation() {
+    BacktestRequest request{Testing::representative(),
+                            "AAPL",
+                            Didrachma::Market::Core::Time::UtcTimestamp{Duration{100}},
+                            Didrachma::Market::Core::Time::UtcTimestamp{Duration{200}},
+                            {"fixture", {}},
+                            {},
+                            1};
+    CPPTEST_ASSERT(validate(request, Testing::catalog()).empty());
+    request.subject_symbol = "";
+    request.through = Didrachma::Market::Core::Time::UtcTimestamp{Duration{99}};
+    request.execution.quantity = 0;
+    request.fill_model_version = 0;
+    const auto errors = validate(request, Testing::catalog());
+    CPPTEST_ASSERT(has(errors, ValidationCode::InvalidBacktestRequest));
+    CPPTEST_ASSERT(errors.size() >= 4);
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_representative_definition_is_valid);
     CPPTEST_RUN(test_duplicate_missing_timeframe_instrument_and_parameters);
     CPPTEST_RUN(test_cycles_prices_conditions_and_actions_are_rejected);
     CPPTEST_RUN(test_sequence_timeout_and_out_of_order_are_explicit_model_state);
+    CPPTEST_RUN(test_entry_order_validation);
+    CPPTEST_RUN(test_backtest_request_validation);
     return 0;
 }

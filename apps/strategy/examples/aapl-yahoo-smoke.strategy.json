@@ -1,0 +1,47 @@
+{
+  "formatVersion": 2,
+  "id": "aapl-yahoo-smoke",
+  "displayName": "AAPL Yahoo daily smoke",
+  "version": 1,
+  "description": "Opt-in network smoke definition using one subject daily series.",
+  "direction": "long",
+  "primarySeriesId": "subject-daily",
+  "series": [
+    {
+      "id": "subject-daily",
+      "providerId": "yahoo",
+      "instrument": { "kind": "subject" },
+      "timeframe": { "quantity": 1, "unit": "day" }
+    }
+  ],
+  "indicators": [],
+  "entry": {
+    "condition": {
+      "id": "positive-close",
+      "kind": "marketComparison",
+      "predicate": {
+        "seriesId": "subject-daily",
+        "field": "close",
+        "comparison": "greater",
+        "value": 0
+      }
+    },
+    "order": { "kind": "nextBarOpen" }
+  },
+  "stopLoss": {
+    "kind": "percentageFromEntry",
+    "value": 10,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
+  "target": {
+    "kind": "percentageFromEntry",
+    "value": 20,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
+  "exits": [],
+  "runtimeRules": []
+}

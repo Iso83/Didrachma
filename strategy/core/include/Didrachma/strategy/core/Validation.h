@@ -17,7 +17,9 @@ enum class ValidationCode {
     InvalidInstrument,
     InvalidPricePolicy,
     InvalidCondition,
-    InvalidAction
+    InvalidAction,
+    InvalidEntryOrder,
+    InvalidBacktestRequest
 };
 
 struct ValidationError {

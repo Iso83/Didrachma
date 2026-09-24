@@ -103,3 +103,17 @@ cppcmake_test_add(
     COMPILE_DEFINITIONS
         DIDRACHMA_STRATEGY_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
+
+option(DIDRACHMA_ENABLE_YAHOO_STRATEGY_SMOKE "Enable the network-backed AAPL strategy smoke test" OFF)
+if(DIDRACHMA_ENABLE_YAHOO_STRATEGY_SMOKE)
+    add_test(
+        NAME Test_${MODULE_TARGET}_YahooSmoke
+        COMMAND ${MODULE_TARGET}
+            --strategy "${CMAKE_CURRENT_SOURCE_DIR}/examples/aapl-yahoo-smoke.strategy.json"
+            --subject AAPL
+            --from 2025-01-02T00:00:00Z
+            --through 2025-01-31T23:59:59Z
+            --provider yahoo
+    )
+    set_tests_properties(Test_${MODULE_TARGET}_YahooSmoke PROPERTIES LABELS "integration;network")
+endif()

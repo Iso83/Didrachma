@@ -86,7 +86,7 @@ Definition definition() {
     value.entry.condition->id = "all";
     value.entry.condition->kind = ConditionKind::All;
     value.entry.condition->children = {market("subject-up", "primary", 10), market("peer-up", "peer", 50)};
-    value.entry.price = {PricePolicyKind::Absolute, 1};
+    value.entry.order = {EntryOrderKind::NextBarOpen};
     value.stop_loss = {PricePolicyKind::Absolute, 1};
     value.target = {PricePolicyKind::Absolute, 2};
     return value;

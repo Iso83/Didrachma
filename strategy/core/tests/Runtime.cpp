@@ -51,7 +51,7 @@ Definition definition(Direction direction = Direction::Long) {
     value.primary_series_id = "primary";
     value.series = {{"primary", "fixture", {InstrumentKind::Fixed, "TEST"}, {1, Market::Core::Time::Unit::Minute}, {}}};
     value.entry.condition = close_condition("entry", Comparison::Greater, 100);
-    value.entry.price = {PricePolicyKind::Absolute, 0};
+    value.entry.order = {EntryOrderKind::NextBarOpen};
     value.stop_loss = {PricePolicyKind::Absolute, direction == Direction::Long ? 90.0 : 110.0};
     value.target = {PricePolicyKind::Absolute, direction == Direction::Long ? 110.0 : 90.0};
     return value;
@@ -69,6 +69,72 @@ bool near(double left, double right) {
     return std::abs(left - right) < 0.000001;
 }
 } // namespace
+
+int test_next_open_and_final_bar_signal_status() {
+    auto model = definition();
+    model.target = {PricePolicyKind::Absolute, 150};
+    auto result = run(model, {bar(0, 99, 102, 98, 101), bar(60, 103, 105, 102, 104)});
+    CPPTEST_ASSERT(result.entry_status == EntryStatus::Filled && near(*result.entry_price, 103));
+
+    result = run(model, {bar(0, 99, 102, 98, 101)});
+    CPPTEST_ASSERT(result.state == RunState::EntryArmed && result.entry_status == EntryStatus::AwaitingFill);
+    CPPTEST_ASSERT(result.events.size() == 1 && result.events.front().kind == StrategyEventKind::EntryArmed);
+
+    result = run(model, {bar(0, 98, 99, 97, 98)});
+    CPPTEST_ASSERT(result.state == RunState::WaitingForEntry && result.entry_status == EntryStatus::NoSignal);
+    return 0;
+}
+
+int test_long_and_short_limit_touch_and_favorable_gap_fills() {
+    auto long_model = definition();
+    long_model.entry.order = {EntryOrderKind::Limit, 100, 3};
+    long_model.target = {PricePolicyKind::Absolute, 150};
+    auto result = run(long_model, {bar(0, 99, 102, 98, 101), bar(60, 105, 106, 99, 102)});
+    CPPTEST_ASSERT(result.entry_status == EntryStatus::Filled && near(*result.entry_price, 100));
+    CPPTEST_ASSERT(result.events[1].detail == "limit entry price touched");
+
+    result = run(long_model, {bar(0, 99, 102, 98, 101), bar(60, 95, 101, 94, 99)});
+    CPPTEST_ASSERT(near(*result.entry_price, 95));
+    CPPTEST_ASSERT(result.events[1].detail == "limit entry filled at favorable bar open");
+
+    auto short_model = definition(Direction::Short);
+    short_model.entry.condition = close_condition("entry", Comparison::Less, 100);
+    short_model.entry.order = {EntryOrderKind::Limit, 100, 3};
+    short_model.target = {PricePolicyKind::Absolute, 50};
+    result = run(short_model, {bar(0, 101, 102, 98, 99), bar(60, 95, 101, 94, 98)});
+    CPPTEST_ASSERT(near(*result.entry_price, 100));
+    result = run(short_model, {bar(0, 101, 102, 98, 99), bar(60, 105, 106, 99, 103)});
+    CPPTEST_ASSERT(near(*result.entry_price, 105));
+    return 0;
+}
+
+int test_limit_expiry_and_percentage_policies_use_actual_fill() {
+    auto model = definition();
+    model.entry.order = {EntryOrderKind::Limit, 90, 2};
+    model.target = {PricePolicyKind::Absolute, 150};
+    auto result = run(model, {bar(0, 99, 102, 98, 101), bar(60, 105, 106, 100, 104), bar(120, 104, 105, 99, 103)});
+    CPPTEST_ASSERT(result.state == RunState::WaitingForEntry && result.entry_status == EntryStatus::Expired);
+    CPPTEST_ASSERT(result.events.back().kind == StrategyEventKind::EntryExpired);
+    CPPTEST_ASSERT(result.events.back().effective_time == at(180));
+
+    model.entry.order = {EntryOrderKind::Limit, 100, 2};
+    model.stop_loss = {PricePolicyKind::PercentageFromEntry, 10};
+    model.target = {PricePolicyKind::PercentageFromEntry, 10};
+    result = run(model, {bar(0, 99, 102, 98, 101), bar(60, 95, 100, 94, 98)}, {1, {}, 0, 0, 1});
+    CPPTEST_ASSERT(near(*result.entry_price, 95.95));
+    CPPTEST_ASSERT(near(result.projection.segments[1].price, 86.355));
+    CPPTEST_ASSERT(near(result.projection.segments[2].price, 105.545));
+    return 0;
+}
+
+int test_limit_same_bar_ambiguity_is_conservative() {
+    auto model = definition();
+    model.entry.order = {EntryOrderKind::Limit, 100, 2};
+    const auto result = run(model, {bar(0, 99, 102, 98, 101), bar(60, 105, 112, 89, 101)});
+    CPPTEST_ASSERT(result.exit_reason == ExitReason::StopLoss && result.ambiguous_fill);
+    CPPTEST_ASSERT(result.warnings.front().find("limit entry") != std::string::npos);
+    return 0;
+}
 
 int test_target_stop_gap_and_ambiguous_fill_rules() {
     const std::vector target_bars{bar(0, 99, 102, 98, 101), bar(60, 100, 111, 99, 108)};
@@ -156,6 +222,7 @@ int test_long_short_costs_slippage_roi_duration_and_audit() {
 
 int test_runtime_exit_user_stop_restart_and_live_replay_equivalence() {
     auto model = definition();
+    model.entry.order = {EntryOrderKind::Limit, 100, 2};
     model.target = {PricePolicyKind::Absolute, 150};
     auto elapsed = std::make_shared<ConditionExpression>();
     elapsed->id = "elapsed";
@@ -180,6 +247,7 @@ int test_runtime_exit_user_stop_restart_and_live_replay_equivalence() {
     const auto live = live_engine.finish();
     CPPTEST_ASSERT(replayed.exit_reason == ExitReason::RuntimeRule);
     CPPTEST_ASSERT(replayed.events.size() == live.events.size());
+    CPPTEST_ASSERT(replayed.entry_price == live.entry_price);
     CPPTEST_ASSERT(replayed.net_profit_loss == live.net_profit_loss);
 
     auto mutable_model = definition();
@@ -201,6 +269,10 @@ int test_runtime_exit_user_stop_restart_and_live_replay_equivalence() {
 }
 
 int main() {
+    CPPTEST_RUN(test_next_open_and_final_bar_signal_status);
+    CPPTEST_RUN(test_long_and_short_limit_touch_and_favorable_gap_fills);
+    CPPTEST_RUN(test_limit_expiry_and_percentage_policies_use_actual_fill);
+    CPPTEST_RUN(test_limit_same_bar_ambiguity_is_conservative);
     CPPTEST_RUN(test_target_stop_gap_and_ambiguous_fill_rules);
     CPPTEST_RUN(test_condition_exit_and_end_of_range_close);
     CPPTEST_RUN(test_dynamic_target_and_stop_are_historical_segments);

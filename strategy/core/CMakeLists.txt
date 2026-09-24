@@ -149,3 +149,16 @@ cppcmake_test_add(
     INCLUDE_DIRECTORIES
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_BacktestRunner
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "strategy/core"
+    SOURCES
+        tests/BacktestRunner.cpp
+    INCLUDE_DIRECTORIES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)

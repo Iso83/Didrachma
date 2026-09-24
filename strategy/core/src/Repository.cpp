@@ -53,6 +53,7 @@ ENUM_IO(ConditionKind, {"marketComparison", ConditionKind::MarketComparison},
 ENUM_IO(PricePolicyKind, {"absolute", PricePolicyKind::Absolute},
         {"percentageFromEntry", PricePolicyKind::PercentageFromEntry},
         {"indicatorValue", PricePolicyKind::IndicatorValue})
+ENUM_IO(EntryOrderKind, {"nextBarOpen", EntryOrderKind::NextBarOpen}, {"limit", EntryOrderKind::Limit})
 ENUM_IO(ActionKind, {"adjustStop", ActionKind::AdjustStop}, {"adjustTarget", ActionKind::AdjustTarget},
         {"exit", ActionKind::Exit})
 #undef ENUM_IO
@@ -314,6 +315,20 @@ void from_json(const json& j, PricePolicy& v) {
     v.offset = j.value("offset", 0.0);
 }
 
+void to_json(json& j, const EntryOrder& v) {
+    j = {{"kind", v.kind}};
+    if (v.kind == EntryOrderKind::Limit) {
+        j["limitPrice"] = v.limit_price;
+        j["validityPrimaryBars"] = v.validity_primary_bars;
+    }
+}
+
+void from_json(const json& j, EntryOrder& v) {
+    j.at("kind").get_to(v.kind);
+    v.limit_price = j.value("limitPrice", 0.0);
+    v.validity_primary_bars = j.value("validityPrimaryBars", std::uint64_t{});
+}
+
 void to_json(json& j, const RuntimeAction& v) {
     j = {{"kind", v.kind}, {"exitReason", v.exit_reason}};
     optional_to(j, "price", v.price);
@@ -337,7 +352,7 @@ json encode(const Definition& v) {
               {"indicators", v.indicators},
               {"stopLoss", v.stop_loss},
               {"target", v.target}};
-    j["entry"] = {{"price", v.entry.price}};
+    j["entry"] = {{"order", v.entry.order}};
     condition_to(j["entry"]["condition"], v.entry.condition);
     j["exits"] = json::array();
     for (const auto& exit : v.exits) {
@@ -365,7 +380,7 @@ Definition decode(const json& j) {
     j.at("primarySeriesId").get_to(v.primary_series_id);
     j.at("series").get_to(v.series);
     j.at("indicators").get_to(v.indicators);
-    v.entry.price = j.at("entry").at("price").get<PricePolicy>();
+    v.entry.order = j.at("entry").at("order").get<EntryOrder>();
     v.entry.condition = condition_from(j.at("entry").at("condition"));
     v.stop_loss = j.at("stopLoss").get<PricePolicy>();
     v.target = j.at("target").get<PricePolicy>();
@@ -428,11 +443,22 @@ LoadResult deserialize(std::string_view text, IndicatorCatalog catalog) {
     try {
         const auto json = json::parse(text);
         const auto format = json.at("formatVersion").get<std::uint32_t>();
-        if (format != strategy_format_version)
+        if (format > strategy_format_version || format == 0)
             return std::vector<RepositoryError>{
                 {"/formatVersion", "Unsupported strategy format version: " + std::to_string(format)}};
 
-        auto definition = decode(json);
+        auto document = json;
+        std::vector<RepositoryWarning> warnings;
+        if (format == 1) {
+            document["formatVersion"] = strategy_format_version;
+            document["entry"].erase("price");
+            document["entry"]["order"] = {{"kind", "nextBarOpen"}};
+            warnings.push_back({"/entry/price",
+                                "Format 1 entry price was ignored by the legacy engine and was migrated explicitly "
+                                "to a next-bar-open order"});
+        }
+
+        auto definition = decode(document);
         const auto invalid = validate(definition, catalog);
         if (!invalid.empty()) {
             std::vector<RepositoryError> errors;
@@ -441,9 +467,60 @@ LoadResult deserialize(std::string_view text, IndicatorCatalog catalog) {
             return errors;
         }
 
+        if (!warnings.empty())
+            return MigratedDefinition{std::move(definition), std::move(warnings)};
         return definition;
     } catch (const nlohmann::json::exception& e) {
         return std::vector<RepositoryError>{{"/", e.what()}};
+    } catch (const std::exception& e) {
+        return std::vector<RepositoryError>{{"/", e.what()}};
+    }
+}
+
+std::string serialize(const BacktestRequest& request) {
+    json j = {{"requestFormatVersion", 1},
+              {"strategy", encode(request.strategy_snapshot)},
+              {"fromUtcSeconds", request.from.time_since_epoch().count()},
+              {"throughUtcSeconds", request.through.time_since_epoch().count()},
+              {"provider", {{"id", request.provider.id}, {"configuration", request.provider.values}}},
+              {"execution",
+               {{"quantity", request.execution.quantity},
+                {"fixedPerFill", request.execution.fixed_per_fill},
+                {"percentagePerFill", request.execution.percentage_per_fill},
+                {"slippagePercentage", request.execution.slippage_percentage}}},
+              {"fillModelVersion", request.fill_model_version}};
+    optional_to(j, "subjectSymbol", request.subject_symbol);
+    optional_to(j["execution"], "startingCapital", request.execution.starting_capital);
+    return j.dump(2) + "\n";
+}
+
+BacktestRequestLoadResult deserialize_backtest_request(std::string_view text, IndicatorCatalog catalog) {
+    try {
+        const auto j = json::parse(text);
+        if (j.at("requestFormatVersion").get<std::uint32_t>() != 1)
+            return std::vector<RepositoryError>{{"/requestFormatVersion", "Unsupported backtest request version"}};
+        BacktestRequest request;
+        request.strategy_snapshot = decode(j.at("strategy"));
+        optional_from(j, "subjectSymbol", request.subject_symbol);
+        request.from = Market::Core::Time::UtcTimestamp{Duration{j.at("fromUtcSeconds").get<std::int64_t>()}};
+        request.through = Market::Core::Time::UtcTimestamp{Duration{j.at("throughUtcSeconds").get<std::int64_t>()}};
+        request.provider.id = j.at("provider").at("id").get<std::string>();
+        request.provider.values = j.at("provider").at("configuration").get<std::map<std::string, std::string>>();
+        const auto& execution = j.at("execution");
+        execution.at("quantity").get_to(request.execution.quantity);
+        optional_from(execution, "startingCapital", request.execution.starting_capital);
+        execution.at("fixedPerFill").get_to(request.execution.fixed_per_fill);
+        execution.at("percentagePerFill").get_to(request.execution.percentage_per_fill);
+        execution.at("slippagePercentage").get_to(request.execution.slippage_percentage);
+        j.at("fillModelVersion").get_to(request.fill_model_version);
+        const auto invalid = validate(request, catalog);
+        if (!invalid.empty()) {
+            std::vector<RepositoryError> errors;
+            for (const auto& item : invalid)
+                errors.push_back({item.path, item.message});
+            return errors;
+        }
+        return request;
     } catch (const std::exception& e) {
         return std::vector<RepositoryError>{{"/", e.what()}};
     }

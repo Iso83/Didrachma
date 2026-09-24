@@ -56,7 +56,7 @@ inline Definition representative() {
                                {volume, group("not-too-late", ConditionKind::Not,
                                               {leaf("bars", ConditionKind::ClosedBarCount,
                                                     ClosedBarCountCondition{Comparison::Greater, 50})})})});
-    value.entry.price = {PricePolicyKind::IndicatorValue, 0, "fast", "value", 0.05};
+    value.entry.order = {EntryOrderKind::Limit, 100.0, 3};
     value.stop_loss = {PricePolicyKind::PercentageFromEntry, 2.0};
     value.target = {PricePolicyKind::PercentageFromEntry, 5.0};
     value.exits = {{"timed-exit", leaf("elapsed", ConditionKind::ElapsedTime,

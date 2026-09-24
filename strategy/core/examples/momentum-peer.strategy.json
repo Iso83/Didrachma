@@ -1,5 +1,5 @@
 {
-    "formatVersion": 1,
+    "formatVersion": 2,
     "id": "momentum-peer",
     "displayName": "Momentum with sector confirmation",
     "version": 3,
@@ -10,7 +10,9 @@
         {
             "id": "subject-10m",
             "providerId": "fixture",
-            "instrument": { "kind": "subject" },
+            "instrument": {
+                "kind": "subject"
+            },
             "timeframe": {
                 "quantity": 10,
                 "unit": "minute"
@@ -20,7 +22,9 @@
         {
             "id": "subject-1h",
             "providerId": "fixture",
-            "instrument": { "kind": "subject" },
+            "instrument": {
+                "kind": "subject"
+            },
             "timeframe": {
                 "quantity": 1,
                 "unit": "hour"
@@ -46,13 +50,17 @@
             "id": "fast",
             "seriesId": "subject-10m",
             "definitionId": "sma",
-            "parameters": { "period": 10 }
+            "parameters": {
+                "period": 10
+            }
         },
         {
             "id": "slow",
             "seriesId": "subject-1h",
             "definitionId": "sma",
-            "parameters": { "period": 20 }
+            "parameters": {
+                "period": 20
+            }
         },
         {
             "id": "peer-pattern",
@@ -91,12 +99,8 @@
                 "maximumClosedBars": 12
             }
         },
-        "price": {
-            "kind": "indicatorValue",
-            "value": 0.0,
-            "indicatorId": "fast",
-            "outputId": "value",
-            "offset": 0.05
+        "order": {
+            "kind": "nextBarOpen"
         }
     },
     "stopLoss": {

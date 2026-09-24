@@ -7,6 +7,7 @@
 #include "Performance.h"
 #include "ProfilePanel.h"
 #include "RuntimeOptions.h"
+#include "StrategyPanel.h"
 #include "WorkspaceRuntime.h"
 #include "YahooChartDialog.h"
 
@@ -113,9 +114,15 @@ int main(int argc, char** argv) {
     Studio::WorkspaceRepository repository{"didrachma-workspace.json"};
     Didrachma::Apps::Studio::YahooHistoryLoader yahoo_history;
     Studio::EventList analysis_events;
+    Studio::Strategies strategies{analyzer};
+    Didrachma::Apps::Studio::StrategyPanelState strategy_panel;
     std::set<std::string> highlighted_event_ids;
     using namespace Didrachma::StockChart::Render;
     const auto bars = Didrachma::Apps::Studio::demo_bars();
+    const std::filesystem::path strategy_session_path{"didrachma-strategy-session.json"};
+    if (std::filesystem::exists(strategy_session_path))
+        if (const auto error = strategies.restore_session(strategy_session_path, catalog))
+            status = "Strategy session could not be restored: " + *error;
 
     if (std::filesystem::exists("didrachma-workspace.json")) {
         auto loaded = repository.load();
@@ -139,6 +146,8 @@ int main(int argc, char** argv) {
     bool show_events = true;
     bool show_yahoo_chart = false;
     bool show_render_diagnostics = runtime_options.render_diagnostics;
+    bool show_strategies = true;
+    bool show_strategy_monitor = true;
 
     while (!glfwWindowShouldClose(window)) {
         glfwWaitEventsTimeout(1.0 / 30.0);
@@ -147,6 +156,16 @@ int main(int argc, char** argv) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         yahoo_history.apply_if_ready(workspace, views, analyzer, analysis_events, status);
+        strategies.update(
+            [&](std::string_view chart_id) -> std::span<const Bar> {
+                const auto found = std::ranges::find(views, chart_id, &ChartView::id);
+                return found == views.end() ? std::span<const Bar>{} : std::span<const Bar>{found->bars};
+            },
+            [&](std::string_view chart_id) -> Didrachma::StockChart::Core::Document* {
+                const auto found =
+                    std::ranges::find(workspace.documents(), chart_id, &Didrachma::StockChart::Core::Document::id);
+                return found == workspace.documents().end() ? nullptr : &*found;
+            });
 
         if (ImGui::BeginMainMenuBar()) {
             if (ImGui::BeginMenu("Chart")) {
@@ -162,6 +181,8 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Indicator Instances", nullptr, &show_instances);
                 ImGui::MenuItem("Profiles", nullptr, &show_profiles);
                 ImGui::MenuItem("Analysis Events", nullptr, &show_events);
+                ImGui::MenuItem("Strategies", nullptr, &show_strategies);
+                ImGui::MenuItem("Strategy monitor", nullptr, &show_strategy_monitor);
                 ImGui::MenuItem("Render diagnostics", nullptr, &show_render_diagnostics);
                 if (ImGui::BeginMenu("StockCharts")) {
                     for (auto& view : views)
@@ -178,6 +199,56 @@ int main(int argc, char** argv) {
         if (const auto request = Didrachma::Apps::Studio::draw_yahoo_chart_dialog(show_yahoo_chart, status)) {
             Didrachma::Apps::Studio::open_yahoo_chart(workspace, views, yahoo_history, *request);
         }
+
+        if (show_strategies) {
+            const auto open_strategy_chart =
+                [&](const Didrachma::Market::Core::Series::Key& key) -> ChartCore::Document& {
+                const auto existing = std::ranges::find(workspace.documents(), key, &ChartCore::Document::series);
+                if (existing != workspace.documents().end()) {
+                    workspace.select_chart(existing->id());
+                    return *existing;
+                }
+
+                auto& document = workspace.create_chart(key, range, range);
+                views.push_back({document.id(), std::make_unique<CanvasHost>(), {640, 420}, range});
+                views.back().history_range = range;
+                views.back().canvas->resize(views.back().size);
+                workspace.select_chart(document.id());
+                if (key.provider == "yahoo")
+                    yahoo_history.start(document.id(), {key, range, true});
+                else if (key.provider == "demo") {
+                    views.back().bars.assign(bars.begin(), bars.end());
+                    update_geometry(views.back(), document, analyzer, &analysis_events);
+                }
+                return document;
+            };
+
+            const auto find_strategy_chart = [&](std::string_view id) -> ChartCore::Document* {
+                const auto found = std::ranges::find(workspace.documents(), id, &ChartCore::Document::id);
+                return found == workspace.documents().end() ? nullptr : &*found;
+            };
+
+            Didrachma::Apps::Studio::draw_strategies_panel(strategies, strategy_panel, catalog, open_strategy_chart,
+                                                           find_strategy_chart);
+        }
+        if (show_strategy_monitor)
+            Didrachma::Apps::Studio::draw_strategy_monitor(
+                strategies, strategy_panel, [&](std::string_view chart_id, std::optional<Timestamp> timestamp) {
+                    const auto document = std::ranges::find(workspace.documents(), chart_id, &ChartCore::Document::id);
+                    const auto view = std::ranges::find(views, chart_id, &ChartView::id);
+                    if (document == workspace.documents().end() || view == views.end())
+                        return;
+
+                    workspace.select_chart(document->id());
+                    view->open = true;
+                    if (timestamp) {
+                        document->dispatch(ChartCore::SelectTimestamp{*timestamp});
+                        const auto half = (view->visible_range.end - view->visible_range.begin) / 2;
+                        view->visible_range = {*timestamp - half, *timestamp + half};
+                        document->dispatch(ChartCore::NavigateViewport{view->visible_range});
+                        update_geometry(*view, *document, analyzer, &analysis_events);
+                    }
+                });
 
         if (show_catalog) {
             ImGui::Begin("Indicator Catalog", &show_catalog);
@@ -473,6 +544,34 @@ int main(int argc, char** argv) {
                                     {image_minimum.x + segment.second.x, image_minimum.y + segment.second.y},
                                     IM_COL32(255, 195, 64, 255), 2.0F);
                     }
+                for (const auto& run : strategies.runs()) {
+                    const auto primary = std::ranges::find(run.series, run.snapshot.definition().primary_series_id,
+                                                           &Studio::StrategySeriesStatus::binding_id);
+                    if (primary == run.series.end() || primary->chart_id != document->id())
+                        continue;
+
+                    for (const auto& segment : run.result.projection.segments) {
+                        const auto first = selection_mapper.map(segment.begin, segment.price);
+                        const auto last = selection_mapper.map(segment.end, segment.price);
+                        const auto color = segment.kind == Didrachma::Strategy::Core::ProjectionKind::StopPrice
+                                               ? IM_COL32(235, 80, 80, 255)
+                                           : segment.kind == Didrachma::Strategy::Core::ProjectionKind::TargetPrice
+                                               ? IM_COL32(80, 210, 120, 255)
+                                               : IM_COL32(100, 170, 255, 255);
+                        constexpr float dash = 7.0F;
+                        for (float x = first.x; x < last.x; x += dash * 2.0F)
+                            draw_list->AddLine({image_minimum.x + x, image_minimum.y + first.y},
+                                               {image_minimum.x + std::min(x + dash, last.x), image_minimum.y + last.y},
+                                               color, 1.5F);
+                    }
+                    for (const auto& marker : run.result.projection.markers) {
+                        const auto point = selection_mapper.map(marker.time, marker.price);
+                        const auto color = marker.kind == Didrachma::Strategy::Core::ProjectionKind::EntryMarker
+                                               ? IM_COL32(80, 210, 120, 255)
+                                               : IM_COL32(235, 80, 80, 255);
+                        draw_list->AddCircleFilled({image_minimum.x + point.x, image_minimum.y + point.y}, 5.0F, color);
+                    }
+                }
             }
             Didrachma::Apps::Studio::draw_chart_axes(view, image_minimum, image_maximum);
             if (Didrachma::Apps::Studio::draw_standalone_indicator_tabs(view, *document, image_minimum))
@@ -507,6 +606,13 @@ int main(int argc, char** argv) {
                 continue;
             }
 
+            if (strategies.chart_required(view->id)) {
+                (void)strategies.close_view(view->id);
+                ++view;
+                status = "Chart view hidden; strategy runtime remains active";
+                continue;
+            }
+
             const auto chart_id = view->id;
             yahoo_history.cancel(chart_id);
             analysis_events.clear_chart(chart_id);
@@ -533,6 +639,8 @@ int main(int argc, char** argv) {
 
     if (const auto error = repository.save(workspace))
         std::fprintf(stderr, "Unable to persist Studio workspace: %s\n", error->message.c_str());
+    if (const auto error = strategies.save_session(strategy_session_path))
+        std::fprintf(stderr, "Unable to persist strategy session: %s\n", error->c_str());
 
     // Release canvas-owned GL resources while the context is still current, before the UI and window are destroyed.
     views.clear();

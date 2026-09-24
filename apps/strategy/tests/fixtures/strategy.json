@@ -1,5 +1,5 @@
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "id": "cli-subject-peer",
   "displayName": "CLI subject and peer fixture",
   "version": 1,
@@ -7,19 +7,76 @@
   "direction": "long",
   "primarySeriesId": "subject-10m",
   "series": [
-    {"id":"subject-10m","providerId":"fixture","instrument":{"kind":"subject"},"timeframe":{"quantity":10,"unit":"minute"}},
-    {"id":"peer-daily","providerId":"fixture","instrument":{"kind":"fixed","symbol":"XLK"},"timeframe":{"quantity":1,"unit":"day"}}
+    {
+      "id": "subject-10m",
+      "providerId": "fixture",
+      "instrument": {
+        "kind": "subject"
+      },
+      "timeframe": {
+        "quantity": 10,
+        "unit": "minute"
+      }
+    },
+    {
+      "id": "peer-daily",
+      "providerId": "fixture",
+      "instrument": {
+        "kind": "fixed",
+        "symbol": "XLK"
+      },
+      "timeframe": {
+        "quantity": 1,
+        "unit": "day"
+      }
+    }
   ],
   "indicators": [],
   "entry": {
-    "condition": {"id":"entry-all","kind":"all","children":[
-      {"id":"subject-ready","kind":"marketComparison","predicate":{"seriesId":"subject-10m","field":"close","comparison":"greater","value":100}},
-      {"id":"peer-ready","kind":"marketComparison","predicate":{"seriesId":"peer-daily","field":"close","comparison":"greater","value":50}}
-    ]},
-    "price": {"kind":"absolute","value":100,"indicatorId":"","outputId":"","offset":0}
+    "condition": {
+      "id": "entry-all",
+      "kind": "all",
+      "children": [
+        {
+          "id": "subject-ready",
+          "kind": "marketComparison",
+          "predicate": {
+            "seriesId": "subject-10m",
+            "field": "close",
+            "comparison": "greater",
+            "value": 100
+          }
+        },
+        {
+          "id": "peer-ready",
+          "kind": "marketComparison",
+          "predicate": {
+            "seriesId": "peer-daily",
+            "field": "close",
+            "comparison": "greater",
+            "value": 50
+          }
+        }
+      ]
+    },
+    "order": {
+      "kind": "nextBarOpen"
+    }
   },
-  "stopLoss": {"kind":"absolute","value":95,"indicatorId":"","outputId":"","offset":0},
-  "target": {"kind":"absolute","value":105,"indicatorId":"","outputId":"","offset":0},
+  "stopLoss": {
+    "kind": "absolute",
+    "value": 95,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
+  "target": {
+    "kind": "absolute",
+    "value": 107,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
   "exits": [],
   "runtimeRules": []
 }

@@ -274,15 +274,261 @@ Stop after showing the exact CLI command and its deterministic summary/JSON outp
   Note: CMake generates a standalone `Test_Didrachma_apps_strategy_EndToEnd` executable target in the
   `apps/strategy` test module, but Visual Studio is unavailable in this Linux environment for the final UI check.
 
+### Phase 5 corrective review — acceptance reopened on 2026-09-22
+
+The CLI executable exists and its fixture tests pass, but Phase 5 is not accepted as a trustworthy backtest yet.
+Review of the implementation found these concrete semantic gaps:
+
+- `Definition::entry.price` is persisted and validated but never read by `Engine`; every entry is filled at the next
+  primary bar open. The current editor therefore exposes a setting that has no effect.
+- The successful CLI fixture opens at 101 and reaches its 105 target inside the same bar. Its reported duration is zero
+  seconds. This proves plumbing, but it is not a meaningful end-to-end strategy example.
+- `EntryArmed` at the end of the selected range is reported as `no_entry`, so “no signal occurred” and “a signal occurred
+  but no executable bar remained” are indistinguishable.
+- Execution costs/quantity are not part of the versioned strategy definition or a shared versioned run request. Studio
+  stores them separately while the CLI starts from its own defaults, so identical execution is not yet guaranteed.
+- Studio does not call the Phase 5 loading/range workflow at all. Its strategy start path opens charts with the fixed
+  demonstration range `1700000000..1700086400` instead of a user-selected backtest range.
+
+Do not continue the broad Phase 6 UI work until gates 5R.1A through 5R.3 are complete. Work on exactly one gate per
+review cycle, update only that gate's checkboxes, report changed files and test output, then stop for review. If blocked,
+report the precise blocker instead of doing unrelated refactors.
+
+**Current next task: Gate 5R.1A only. Do not modify Runtime, CLI, Studio/ImGui, or start a later gate in the same pass.**
+
+#### Gate 5R.1A — Correct the persisted domain contract (next task)
+
+- [x] Document and implement these separate concepts in UI-independent code:
+  - `Strategy::Core::Definition`: reusable rules; no ticker chosen for a `Subject` binding and no backtest dates;
+  - `BacktestRequest`: strategy snapshot/id, subject symbol, inclusive `from`/`through`, provider configuration,
+    quantity, optional starting capital, costs, slippage, and fill model version;
+  - resolved series: concrete provider + symbol + timeframe keys derived from definition plus request;
+  - `BacktestOutcome`: request snapshot, input readiness/errors, audit events, and final result.
+- [x] Replace the misleading `EntryPlan::price` contract. The minimum accepted entry order model is:
+  - `NextBarOpen`: after the entry condition becomes true on a closed primary bar, fill at the next executable primary
+    bar open;
+  - `Limit`: a fixed limit price plus a positive validity expressed in primary bars.
+- [x] Do not offer “percentage from entry” as an entry order: there is no entry price yet. Keep percentage-from-entry for
+  stop, target, and runtime adjustments, calculated from the actual filled entry price.
+- [x] Treat a desired entry price range as conditions, not as an order-price hack. Existing boolean conditions must be
+  able to express `price >= minimum AND price <= maximum`; later Studio UI will expose this as a simple “Price range”
+  preset.
+- [x] Version the JSON contract for the corrected entry model. Load the old format only through an explicit migration
+  that maps its ignored entry-price field to `NextBarOpen` and returns a visible warning; never silently pretend the old
+  value was honored.
+- [x] Add model/validation/repository tests for valid and invalid entry orders, valid and invalid backtest requests,
+  JSON migration warning, and exact round-trip of the new contracts.
+- [x] Run only the affected strategy/core model, validation, and repository tests; report the proposed JSON example and
+  stop. Do not change runtime execution, CLI, or Studio in Gate 5R.1A.
+
+#### Gate 5R.1B — Implement and prove entry execution
+
+- [x] Make `Engine` consume the persisted entry order; no entry setting may remain validated but ignored.
+- [x] Preserve next-open semantics for `NextBarOpen`.
+- [x] Define and implement deterministic limit fills:
+  - long: if the next bar opens at or below the limit, fill at the better open; otherwise fill at the limit only when the
+    bar low reaches it;
+  - short: if the next bar opens at or above the limit, fill at the better open; otherwise fill at the limit only when the
+    bar high reaches it;
+  - if not filled before validity expires, emit an audited `EntryExpired` event and return to waiting for a new signal;
+  - use a documented conservative result/warning if entry plus stop/target could occur in one OHLC bar and event order
+    is unknowable.
+- [x] Distinguish a run with no signal from a final-bar signal or expired limit that never filled.
+- [x] Add runtime tests proving next-open fill, long/short limit fill, favorable gap fill, expiry, final-bar signal without
+  a fill, percentage stop/target from the actual fill, and replay/incremental equivalence.
+- [x] Run strategy/core runtime tests and stop. Do not change CLI or Studio in Gate 5R.1B.
+
+#### Gate 5R.2 — One provider-neutral backtest runner for CLI and Studio
+
+- [x] Extract the loading, warm-up, readiness, date filtering, engine execution, and finish/report input currently owned
+  by `apps/strategy/Application.cpp` into one UI-independent backtest runner. CLI and Studio must call this same runner;
+  Studio must not recreate a second orchestration path.
+- [x] Define the range contract precisely: evaluate primary bars whose close time is in inclusive `[from, through]`;
+  data before `from` is warm-up only; data after `through` may not influence a decision or fill.
+- [x] Return structured errors for invalid ranges, no bars in range, insufficient warm-up, unsupported timeframe,
+  provider failure, unresolved subject, and calculation/engine failure.
+- [x] Validate requested timeframes against provider capabilities before downloading. For Yahoo, only expose supported
+  frames from `Market::Providers::Yahoo::intervals()`; `2000 Minute` must be rejected before creating a chart or run.
+  Keep Yahoo-specific capability discovery outside strategy/core.
+- [x] Separate orchestration status (`Preparing`, `Ready`, `Executing`, `Completed`, `Failed`, `Cancelled`) from the
+  trading state (`WaitingForEntry`, `EntryArmed`, `Running`, `Exited`, and so on).
+- [x] Ensure the result distinguishes at least: `NoSignal`, `SignalNotFilled`, `OpenPositionClosedAtEnd`, `Exited`, and
+  `Failed`.
+- [x] Add offline tests with several realistically spaced bars and a non-zero-duration trade. Assert exact entry/exit
+  timestamps, fill prices, range boundaries, stop/target, costs, and report status.
+- [x] Run all strategy/core and apps/strategy tests and stop. Do not change the Studio editor in Gate 5R.2.
+
+#### Gate 5R.3 — Re-accept the CLI backtest application
+
+- [x] Adapt the CLI into a thin argument/report adapter over the shared backtest runner.
+- [x] Prove that CLI arguments produce the same `BacktestRequest` and byte-equivalent result data as a direct runner
+  call, apart from presentation metadata.
+- [x] Replace the zero-duration happy-path fixture with a readable subject + fixed peer example covering several bars.
+- [x] Keep a distinct regression test showing an entry signal on the final selected bar does not become a fictitious
+  fill and is not mislabeled as “no signal”.
+- [x] Add an opt-in Yahoo smoke command for AAPL using a supported timeframe and valid historical range. Network access
+  remains outside default CTest, but the exact command and expected input summary must be reported.
+- [x] Build `Didrachma_apps_strategy`, run its compiled CTest target and the complete offline CTest suite, show one full
+  JSON report, and stop for review. Only after approval may Phase 6 resume.
+
 ---
 
 ## Phase 6 — Strategy editor and monitor in Didrachma Studio
 
+### Phase 6 review result — rejected on 2026-09-22
+
+The current implementation is not accepted as a usable strategy editor. The panel exposes internal ids as free-text
+fields, uses the indicator catalog only during validation, and provides add-only editing for most collections. A user
+can create structurally invalid objects but cannot complete or correct them without knowing repository-internal ids or
+editing JSON outside Studio.
+
+The checked items below have been reset to match what the implementation and manual review actually prove. Keep the
+existing work where it is sound, but complete this corrective pass before checking an item again. Do not begin a later
+phase and do not mark an item complete solely because a button, field, or unverified code path exists.
+
+### Logical model the Studio must present
+
+The UI must stop presenting storage ids as if they were trading concepts. Use this separation consistently:
+
+| Concept | Meaning | Example shown to the user |
+| --- | --- | --- |
+| Strategy definition | Reusable logic, independent of one backtest period | “Daily + hourly trend confirmation” |
+| Subject | The share supplied when a run starts | `AAPL` |
+| Named series role | A readable role inside the strategy; it is not a ticker | “Subject 1 hour”, “Subject 15 minutes” |
+| Fixed series | Context instrument stored in the definition | “Sector ETF — XLK — 1 day” |
+| Backtest request | Concrete subject, from/through, provider and execution assumptions | `AAPL`, 2025-01-01 through 2025-12-31 |
+| Run/result | One immutable request plus its loading state, events and outcome | “AAPL 2025 — completed — +7.2%” |
+
+For a `Subject` series, the editor shows a role such as “Subject 1 hour”; it must not invite the user to type `AAPL` into
+an alias and then separately type another symbol in a distant `Subject` field. The symbol is entered once in Run Setup.
+A fixed comparison instrument shows its actual ticker directly in the series editor.
+
+Backtest dates belong to Run Setup, not to the reusable strategy definition. Opening a run must never fall back to the
+demo range in `Main.cpp`. Every loaded chart, calculation and report for that run uses the request's `from`/`through`
+plus explicitly reported warm-up history.
+
+### Phase 6 execution protocol
+
+Complete exactly one gate per review cycle. Do not attempt all remaining Phase 6 items in one long change. At the end of
+each gate: update only its checkboxes, list changed files, show the exact tests run, state manual checks still open, and
+stop. The broad acceptance lists later in this phase are reference requirements, not permission to skip ahead.
+
+#### Gate 6A — Finish the reusable strategy-definition editor
+
+- [ ] Build on the existing `StrategyEditor` draft instead of replacing it. Prove deep-copy isolation for every nested
+  condition, exit and runtime rule.
+- [ ] Replace visible internal ids with human labels. Generated ids remain stable but appear only as read-only advanced
+  information.
+- [ ] Series cards use these controls: role name, provider, `Subject` or `Fixed`, fixed symbol when applicable, and a
+  supported timeframe selector. Do not expose free integer/unit entry for Yahoo.
+- [ ] The primary-series selector shows role names and enough context to distinguish timeframe/instrument.
+- [ ] Indicator/pattern selection comes from the catalog, populates defaults, constrains parameters to metadata bounds,
+  and offers only compatible outputs in later conditions.
+- [ ] Finish all condition editors and the price-range preset. Add/remove/reorder and dependency blocking must work for
+  every repeatable item.
+- [ ] Replace the old entry-price widget with the Gate 5R entry-order controls: `Next bar open` or `Limit`, including
+  limit validity. Stop/target keep absolute, percentage-from-filled-entry, and compatible indicator-derived policies.
+  Note: the obsolete `entry.price` widget was removed during the Gate 5R compile repair. Gate 6A must restore an
+  **Entry** section backed by `EntryPlan::order`; do not omit entry controls from the completed editor.
+- [ ] `Apply`, `Cancel`, `Save`, and `Save As` have distinct behavior. Validation errors appear beside repairable fields.
+- [ ] Construct, save, reload and compare a complete strategy using editor operations in a headless test.
+- [ ] Run only editor/repository/core tests, report screenshots/manual gaps, and stop.
+
+#### Gate 6B — Add an explicit Backtest Run Setup workflow
+
+- [ ] Selecting a valid definition enables `New backtest`; it must not immediately create a run or chart.
+- [ ] Run Setup contains: strategy name/version, subject ticker when required, inclusive `From` and `Through`, provider,
+  quantity, optional starting capital, fixed/percentage costs, slippage, and fill-model version.
+- [ ] Use proper date/time controls or validated ISO UTC input with clear examples. Display the provider's effective
+  maximum history range for each selected timeframe.
+- [ ] Show a resolved-input preview before execution: role, actual symbol, provider, requested timeframe, native or
+  derived source interval, requested evaluation range, warm-up begin, and validation status.
+- [ ] The primary action is `Run backtest`. Keep historical backtest and polling/live execution as visibly different
+  modes; only historical backtest is required in this gate.
+- [ ] Reject empty subject, invalid date order, future range, unsupported timeframe, and provider reach violations before
+  starting background work. The screenshot case `pff / 2000 Minute` must be impossible to submit.
+- [ ] Persist recent run setup separately from the reusable definition, without hiding it inside the chart workspace.
+- [ ] Test request construction and validation headlessly, then add one focused ImGui smoke/manual check and stop.
+
+#### Gate 6C — Execute Studio backtests through the shared runner
+
+- [ ] `Run backtest` submits the exact `BacktestRequest` from Gate 6B to the accepted shared runner from Gate 5R.2.
+- [ ] Provider/history work remains off the UI thread. Display `Preparing`, per-series loading/readiness, `Executing`,
+  `Completed`, `Failed`, or `Cancelled` without creating a false trading run when data loading fails.
+- [ ] Use the request range for provider loads and charts. Remove the hard-coded demonstration range from the strategy
+  path.
+- [ ] A run with no bars or an unsupported/rejected provider request shows the structured cause and does not present
+  zero-valued P/L as if a strategy executed.
+- [ ] Prove Studio and CLI create equivalent requests and results for the same fixture strategy, subject, dates and costs.
+- [ ] Perform one real manual AAPL backtest over a valid supported Yahoo range and stop with its resolved-input summary.
+
+#### Gate 6D — Results, evidence and chart projection
+
+- [ ] Present completed historical backtests separately from active polling/live runs.
+- [ ] Result header shows subject, date range, status, entry/exit time and price, exit reason, gross/net P/L, return,
+  duration, costs, ambiguity and warnings. Use `—` instead of misleading zeroes for values that do not exist.
+- [ ] Show every condition/group result with evidence at the evaluated bar, including sequence progress.
+- [ ] Each event records its source series. Navigation opens the actual source chart/timeframe/timestamp rather than
+  always using the primary chart.
+- [ ] Strategy-owned chart instances are keyed by resolved series and cleaned up at every terminal state without touching
+  manual instances.
+- [ ] Closing a chart really releases view/render resources; stored run data remains available for reopening projections.
+- [ ] Add headless orchestration tests plus focused projection/navigation tests and stop.
+
+#### Gate 6E — Final Phase 6 acceptance
+
+- [ ] Run the full manual workflow below without typing internal ids or editing JSON.
+- [ ] Run the complete offline CTest suite and build chart, Studio and strategy applications.
+- [ ] Report performance for data preparation, indicator calculation and backtest execution separately; do not describe
+  an unmeasured long UI stall as acceptable.
+- [ ] Update the global Phase 6 and final acceptance checkboxes only after the corresponding manual checks are observed.
+- [ ] Stop for user review; do not begin database, broker or risk-management work.
+
+### Cross-gate editor requirements
+
+- Stable ids remain part of the persisted model, but routine editing must not require the user to know or type them.
+  Generate collision-free ids when an item is created. Show them as read-only/advanced metadata where useful.
+- Use model-aware selectors instead of free-text foreign keys:
+  - primary series: dropdown containing the strategy's named series;
+  - indicator series: dropdown containing the strategy's named series;
+  - indicator definition: searchable selector populated from the supplied Indicator Catalog, preferably grouped by the
+    catalog group and showing the display name;
+  - condition series/indicator/output references: filtered dropdowns containing only compatible existing bindings and
+    outputs;
+  - indicator-derived price policies: indicator-binding and compatible-output dropdowns.
+- Selecting an indicator or pattern from the catalog must immediately copy its parameter defaults into the binding and
+  render editors from its `ParameterDefinition` metadata, including display name, type, minimum, and maximum. Changing
+  the selected definition must reconcile parameters deliberately; it must not retain unrelated parameter ids.
+- Provide edit and remove operations for every repeatable collection: named series, indicator/pattern bindings,
+  condition children, sequence steps, exits, runtime rules, and runtime actions. Ordered collections must also support
+  move up/down. `Not` must remain limited to exactly one child.
+- Dependency-aware removal is required. If an item is referenced, either block removal and list the references or offer
+  an explicit cascading repair. Never silently leave dangling ids. Re-select or clearly invalidate the primary series
+  when its binding is removed.
+- Implement complete controls for every Phase 2 condition type, not only a `Kind` dropdown:
+  - market field, comparison operator, series and value;
+  - indicator comparison binding, output, comparison operator and value;
+  - indicator cross left/right binding and outputs or constant, plus cross direction;
+  - pattern binding and optional direction;
+  - elapsed duration and comparison;
+  - closed-bar count and comparison;
+  - unrealized gain/loss, comparison and percentage;
+  - `All`, `Any`, `Not`, and ordered `Sequence`, including both maximum elapsed time and maximum closed bars.
+- Editing must use a draft copy. `Apply`/`Save` commits the draft, `Cancel` restores the original, and closing or changing
+  selection with dirty edits asks whether to save, discard, or continue editing. Merely focusing a widget must not mark
+  the definition dirty.
+- New definitions use `Save As`; an imported/saved definition saves back to its existing path unless `Save As` is
+  chosen. Import/load errors and save errors must be visible in the panel. Do not use one ambiguous `File` textbox as
+  both import source and save destination.
+- Put validation messages next to the affected control and retain a compact validation summary. The editor must make
+  every reported error repairable through the UI.
+
 ### Definition management
 
-- [ ] Add a `Strategies` panel with separate `Definitions` and `Running` views.
-- [ ] Support select, create, edit, duplicate, save, load/import, delete, start, and stop. Destructive actions require confirmation when a definition or run has unsaved state.
-- [ ] Open create/edit in a dedicated dialog with sections for:
+- [x] Add a `Strategies` panel with separate `Definitions` and `Running` views.
+- [ ] Support select, create, edit, duplicate, save, save-as, load/import, delete, start, and stop as complete workflows.
+  Destructive actions and selection changes must respect dirty editor state.
+- [ ] Open create/edit in a dedicated editor with draft/apply/cancel semantics and complete sections for:
   - identity and subject/fixed instruments;
   - named series and timeframes;
   - indicator/pattern bindings and parameters;
@@ -290,36 +536,93 @@ Stop after showing the exact CLI command and its deterministic summary/JSON outp
   - initial stop and target;
   - runtime rules and exit conditions;
   - position/cost assumptions.
-- [ ] Validate while editing and show field-specific errors. Disable Start while the definition is invalid or required data is unavailable.
-- [ ] Save/load through the Phase 2 repository; do not hide strategy definitions inside `didrachma-workspace.json`.
+- [ ] Replace raw reference-id entry with the catalog/model-aware selectors and generated stable ids specified above.
+- [ ] Support edit, dependency-aware remove, and ordering for every repeatable collection; the editor must no longer be
+  add-only.
+- [ ] Validate while editing and show field-specific, actionable errors. Disable Start while the definition is invalid,
+  the required subject is absent, series resolution failed, or prepared input data is not ready.
+- [x] Save/load through the Phase 2 repository; do not hide strategy definitions inside `didrachma-workspace.json`.
 
 ### Selected/running strategy panel
 
-- [ ] Add a separate detail/monitor panel for the selected definition or run.
-- [ ] List every underlying series binding with alias, resolved symbol, timeframe, readiness, last closed timestamp, and the conditions using it.
-- [ ] Clicking an underlying series selects its existing chart or opens a chart if none exists.
-- [ ] Automatically materialize the exact indicator/pattern instances required by that series' conditions. Track them by stable strategy binding id:
+- [ ] Add a separate detail/monitor panel that supports both a selected definition before start and a selected/restored
+  run. Do not show the empty “select a definition or run” state when a definition is selected.
+- [ ] List every underlying series binding with display alias, resolved symbol, timeframe, readiness, last closed
+  timestamp, and the actual conditions using it.
+- [x] Clicking an underlying series selects its existing chart or opens a chart if none exists.
+- [ ] Automatically materialize the exact indicator/pattern instances required by that series' conditions. Track them
+  by stable strategy binding id plus resolved series/chart identity, so two subjects running the same definition cannot
+  accidentally share an instance on the wrong chart:
   - never match only by display name;
   - never overwrite a user's manual instance;
   - reuse an exact strategy-owned binding where safe;
   - remove only strategy-owned material when no run/view still needs it.
-- [ ] Show every condition leaf as `True`, `False`, or `Unknown` with its latest evidence, plus ordered-sequence progress.
-- [ ] While running, show state, start time, duration, entry/current price, ROI/P&L, stop, target, last rule, and event history.
+- [ ] Release strategy-owned instances when a run reaches any terminal state, not only after an explicit user stop.
+- [ ] Show every entry, exit, and runtime-rule condition leaf as `True`, `False`, or `Unknown` with its latest evidence.
+  Show group results and ordered-sequence progress rather than hardcoded per-series `Unknown` text.
+- [ ] While running, show named state, start time, duration, entry/current price, realized or unrealized ROI/P&L as
+  appropriate, stop, target, last triggered rule, and event history. Do not expose enum values as unexplained integers.
 
 ### Chart integration
 
-- [ ] Render pattern markers on each corresponding underlying chart.
-- [ ] On the primary chart, render entry/exit markers and dotted, time-bounded entry/stop/target segments, including step changes when runtime rules adjust them.
-- [ ] Selecting a strategy event navigates to its chart, timeframe, and timestamp and highlights the relevant bar/marker/segment.
-- [ ] A running strategy continues when panels or charts are hidden/closed. Closing a view releases only view/render resources, not required strategy data/runtime state.
-- [ ] Polling/live updates use the same closed-bar transition contract and do not make the docking/UI thread own provider work.
+- [ ] Render and manually verify pattern markers on each corresponding underlying chart for a strategy-selected pattern.
+- [x] On the primary chart, render entry/exit markers and dotted, time-bounded entry/stop/target segments, including step changes when runtime rules adjust them.
+- [ ] Selecting a strategy event navigates to the event's actual series/chart, timeframe, and timestamp and highlights the
+  relevant bar/marker/segment; do not route every event to the primary chart.
+- [ ] Move strategy-required bars/provider sessions out of `ChartView`. A running strategy continues when panels or
+  charts are hidden/closed, while closing a chart really releases its view/render resources. `close_view()` must have
+  real, tested behavior rather than being a no-op.
+- [ ] Polling/live updates use the same closed-bar transition contract and do not make the docking/UI thread own provider
+  work. Detect same-count `Backfill`/`Reset` revisions; comparing only the number of closed bars is insufficient.
+- [ ] Do not rebuild the complete engine and replay all history for every ordinary newly closed bar. Use the shared
+  incremental/dirty-tail runtime path, while proving equivalence with full replay.
 
 ### Tests and Phase 6 gate
 
-- [ ] Test Studio orchestration without ImGui/OpenGL: open/reuse required charts, create strategy-owned instances, preserve manual instances, close/reopen views, and keep a run alive.
-- [ ] Test definition save/load, start/stop, restart snapshot behavior, and workspace restart handling for definitions and run summaries.
-- [ ] Add only focused widget/render smoke coverage where core tests cannot prove behavior.
+- [ ] Extract UI-independent editor operations where practical and test catalog selection, default parameter population,
+  generated unique ids, compatible reference/output choices, changing definitions, dependency-aware removal, ordering,
+  draft cancel/apply, and dirty-state transitions.
+- [ ] Test every condition editor variant by constructing a valid strategy exclusively through editor operations and
+  round-tripping it through the Phase 2 repository.
+- [ ] Test Studio orchestration without ImGui/OpenGL: open/reuse required charts, create strategy-owned instances,
+  preserve manual instances, run the same definition for two different subjects, clean up every terminal state,
+  genuinely close/reopen views, and keep the strategy runtime alive independently of those views.
+- [ ] Test definition save/load/save-as/import failures, start/stop, immutable running snapshots, and restart handling for
+  saved definitions and historical run summaries.
+- [ ] Test append-close, forming replacement, and same-count backfill/reset updates. Prove incremental results equal a
+  full replay and that committed decisions are revised only for explicit historical corrections.
+- [ ] Add focused widget/render smoke coverage for the selector and remove flows that core tests cannot prove.
 - [ ] Build both apps, run the complete CTest suite, and perform the full manual workflow with one subject plus at least one fixed sector peer on different timeframes.
+
+### Required manual acceptance workflow
+
+- [ ] Create a new strategy without typing any internal id.
+- [ ] Add subject series for 10-minute and 1-hour data plus a fixed daily sector peer; select the primary series from a
+  dropdown, then remove and re-add a non-primary series.
+- [ ] Add at least one continuous indicator and one TA-Lib pattern through the searchable catalog selector. Confirm that
+  defaults and bounded parameter controls appear immediately, then change the selected definition and verify its
+  parameters/outputs are reconciled.
+- [ ] Build a nested entry expression and an ordered sequence using selectors only. Remove and reorder children, and
+  configure both sequence timeout forms.
+- [ ] Add and remove an exit, runtime rule, and runtime action. Verify referenced objects cannot be deleted silently.
+- [ ] Select `Next bar open` entry and percentage-from-entry stop/target. Verify the editor does not request a fictitious
+  absolute entry price. Then switch to a fixed limit order and configure its validity.
+- [ ] Use the “Price range” entry-condition preset and verify it creates the intended lower/upper market comparisons.
+- [ ] Cancel edits and prove the stored definition did not change; edit again, save, close Studio, reopen it, and load the
+  same complete definition.
+- [ ] Choose `New backtest`, enter subject `AAPL`, select an explicit inclusive `From` and `Through`, and review the
+  resolved series before execution. Confirm that `AAPL` is the actual subject symbol and not a series alias.
+- [ ] Verify only provider-supported timeframe choices are offered. Confirm arbitrary `2000 Minute` input cannot be
+  created or submitted.
+- [ ] Run the backtest only after request validation and data readiness. Confirm the result records the chosen dates,
+  subject, effective warm-up, fill model and execution assumptions, and shows real leaf evidence/sequence progress.
+- [ ] Repeat the exact request through `Didrachma_apps_strategy` and confirm Studio and CLI return the same entry, exit,
+  P/L and status.
+- [ ] Open every underlying chart, verify the strategy-owned indicators/patterns and primary entry/stop/target projection,
+  close the chart view, and confirm the stored result remains available without retaining the view resource.
+- [ ] Navigate an event originating on a secondary series and verify Studio opens/selects that exact chart and timestamp.
+- [ ] Confirm `NoSignal`, `SignalNotFilled`, target/stop exit, and end-of-range close are visibly distinct. Verify only
+  strategy-owned instances are released while manual instances remain.
 
 ### Phase 6 review gate
 
@@ -333,8 +636,13 @@ Stop and report the complete Studio workflow, remaining manual checks, performan
 - [ ] Forming-bar updates cannot repaint a committed marker or strategy decision; explicit backfill/reset is the only historical correction path.
 - [ ] One saved strategy can combine multiple timeframes of the subject instrument with fixed peer/sector instruments.
 - [ ] Conditions support simultaneous boolean logic and ordered sequences with visible evidence.
+- [ ] Entry execution has audited next-open and fixed-limit semantics; no persisted editor option is ignored by the
+  runtime, and percentage stop/target values use the actual fill price.
 - [ ] A run tracks duration and ROI, and runtime conditions can adjust the target and tighten the stop with a full audit trail.
-- [ ] Studio and the CLI load the same strategy file and use the same evaluator, fill model, and result calculations.
+- [ ] Studio requires an explicit subject and inclusive backtest `from`/`through`, validates provider-supported
+  timeframes/range limits, and never uses the demonstration chart range for a strategy run.
+- [ ] Studio and the CLI load the same strategy file, construct the same backtest request, and use the same data-loading
+  workflow, evaluator, fill model, and result calculations.
 - [ ] The CLI reports all triggers and reproducible gross/net yield or loss.
 - [ ] Studio provides definition editing, running-strategy monitoring, underlying-chart selection, automatic strategy-owned indicator instances, and entry/stop/target visualization.
 - [ ] Core tests are deterministic/offline; the complete CTest suite passes; both `Didrachma_apps_chart` and `Didrachma_apps_studio` build.

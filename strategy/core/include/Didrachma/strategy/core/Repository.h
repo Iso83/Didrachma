@@ -1,18 +1,29 @@
 #pragma once
 
+#include <Didrachma/strategy/core/Backtest.h>
 #include <Didrachma/strategy/core/Validation.h>
 #include <filesystem>
 #include <variant>
 
 namespace Didrachma::Strategy::Core {
-inline constexpr std::uint32_t strategy_format_version = 1;
+inline constexpr std::uint32_t strategy_format_version = 2;
 
 struct RepositoryError {
     std::string path;
     std::string message;
 };
 
-using LoadResult = std::variant<Definition, std::vector<RepositoryError>>;
+struct RepositoryWarning {
+    std::string path;
+    std::string message;
+};
+
+struct MigratedDefinition {
+    Definition definition;
+    std::vector<RepositoryWarning> warnings;
+};
+
+using LoadResult = std::variant<Definition, MigratedDefinition, std::vector<RepositoryError>>;
 
 class Repository {
 public:
@@ -34,4 +45,8 @@ public:
 
 [[nodiscard]] std::string serialize(const Definition&);
 [[nodiscard]] LoadResult deserialize(std::string_view, IndicatorCatalog catalog = {});
+
+using BacktestRequestLoadResult = std::variant<BacktestRequest, std::vector<RepositoryError>>;
+[[nodiscard]] std::string serialize(const BacktestRequest&);
+[[nodiscard]] BacktestRequestLoadResult deserialize_backtest_request(std::string_view, IndicatorCatalog catalog = {});
 } // namespace Didrachma::Strategy::Core
