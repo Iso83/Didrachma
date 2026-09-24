@@ -186,6 +186,10 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
                     ? dirty_index
                     : (dirty_index > static_cast<std::size_t>(lookback) ? dirty_index - lookback : 0);
         mode = RecalculationKind::Tail;
+        if (request.bars.size() - start <= static_cast<std::size_t>(lookback)) {
+            start = 0;
+            mode = RecalculationKind::Full;
+        }
     }
 
     std::vector<double> open, high, low, close, volume;

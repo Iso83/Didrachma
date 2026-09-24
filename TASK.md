@@ -442,28 +442,47 @@ ALL_BUILD remain green. Gate 5R.4A is accepted; do not reopen it during 5R.4B.
   fail against the pre-correction implementation and pass after the fix; report exact commands, changed files, and any
   compatibility decision, then stop for review. Do not start 5R.4B in the same pass.
 
-#### Gate 5R.4B — Repair invalidation, derivation, warm-up and readiness (current task)
+#### Gate 5R.4B — Repair invalidation, derivation, warm-up and readiness (review corrections required)
 
 Do not start this gate until 5R.4A is reviewed. Do not change Runtime fills, CLI presentation, Studio/ImGui, Phase 6, or
 `extern/`.
+
+Review of sandbox `Didrachma - gate 5R.4B` retained the native TA-Lib lookback and late-insufficient-history fixes, but
+did not accept the gate. The green tests do not exercise several required incremental paths:
+
+- an `open_time` correction starts invalidation at the old timestamp only. Moving a bar earlier can leave the new bucket
+  and cached analyzer output untouched; invalidation must cover both the old and replacement coordinates;
+- indicator lookback is expanded by nominal clock duration. Across missing bars, weekends, or other gaps that can select
+  fewer than the analyzer's required number of prior samples. TA-Lib can then produce an empty tail which is merged as a
+  successful recalculation while stale cached output survives;
+- `refresh_derived()` still resamples every bar of every registered derived series after any source change. There is no
+  affected-bucket merge, no derived slice/update counter, and no proof of unchanged-prefix reuse;
+- the calculation-reuse cache lives only inside one `calculate()` call. A second evaluation at the same relevant input
+  revision calls the analyzer again, and the tests do not prove one calculation across the actual entry/exit/rule path;
+- the warm-up test's `maximum_elapsed` case is masked by a larger `maximum_closed_bars` case. It would still pass if
+  elapsed history were ignored, and derived-source warm-up is not planned from the derived indicator dependency;
+- the fake analyzer used by the correction/update tests always performs a full calculation, so those tests do not prove
+  TA-Lib tail metadata or incremental/full equivalence for the requested update kinds.
+
+Keep 5R.4C and Phase 6 blocked. Correct only the open items below, run their focused regressions, then stop for review.
 
 - [x] Make same-count replacement detection compare every decision-relevant bar field: open/close timestamp, state,
   open, high, low, close, and volume. The dirty range begins at the changed source bar's `open_time`, because indicator
   samples are keyed by `open_time`; do not begin at `close_time` and accidentally skip a zero-lookback calculation.
   When `DataGraph::apply()` seeds a temporary `Bars` model from existing history, clear that seed/reset dirty range
   before applying the real update so an append or small backfill does not dirty all history.
-- [x] Add separate regression cases for high-only, low-only, open-only, volume-only, close-time, state-only,
+- [ ] Add separate regression cases for high-only, low-only, open-only, volume-only, close-time, state-only,
   `ReplaceForming`, `Backfill`, and `Reset` corrections. Compare the complete incremental evaluations and indicator
   outputs with a fresh full replay, including evidence/source timestamps, not only the final truth value.
-- [x] Make derived-series relationships real dependency-graph edges. An indicator bound to a derived series must depend
+- [ ] Make derived-series relationships real dependency-graph edges. An indicator bound to a derived series must depend
   on the resampling result, which in turn depends on its source series; a disconnected `resampling:<id>` node is not
   sufficient. A source append, forming replacement, backfill, or reset must automatically refresh the affected derived
   bucket/tail after the initial `derive_series()` relationship is registered.
-- [x] Propagate source dirty ranges through resampling and indicator lookback using source-bar `open_time` semantics.
+- [ ] Propagate source dirty ranges through resampling and indicator lookback using source-bar `open_time` semantics.
   Pass each indicator its own affected dirty range and recompute only the required tail. Add instrumentation/assertions
   for the reported `RecalculationKind`, dirty begin/end, calculated input slice, and unchanged-prefix reuse; equal final
   values alone are insufficient.
-- [x] Register entry, explicit exit, and runtime-rule condition trees in the dependency graph. Warm-up planning must
+- [ ] Register entry, explicit exit, and runtime-rule condition trees in the dependency graph. Warm-up planning must
   include analyzer lookback plus the history needed to reconstruct sequences from all three areas, including both
   `maximum_closed_bars` and `maximum_elapsed` where present.
 - [x] Use the analyzer-owned `required_history()` contract for warm-up planning; keep TA-Lib lookback discovery in the
@@ -472,10 +491,10 @@ Do not start this gate until 5R.4A is reviewed. Do not change Runtime fills, CLI
 - [x] Propagate analyzer `InsufficientHistory` to binding readiness and to the runner's structured
   `InsufficientWarmup` failure even when the initially planned bar count was met. Never report that binding as `Ready`
   or silently continue with `Unknown`; add an explicit runner regression.
-- [x] Preserve one provider load for identical resolved series keys and one analyzer calculation for identical
+- [ ] Preserve one provider load for identical resolved series keys and one analyzer calculation for identical
   calculation identities (same resolved source key, definition, parameters, and relevant input revision), while still
   exposing results under every configured binding id. Add counters proving reuse and proving derived inputs update once.
-- [x] Run the affected analysis/core, TA-Lib adapter, strategy evaluation, and backtest-runner tests. Report commands,
+- [ ] Run the affected analysis/core, TA-Lib adapter, strategy evaluation, and backtest-runner tests. Report commands,
   changed files, load/calculation counts, and any remaining performance risk; then stop for review.
 
 #### Gate 5R.4C — Re-accept runtime equivalence and the auditable CLI report

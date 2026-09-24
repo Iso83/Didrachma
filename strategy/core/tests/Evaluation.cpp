@@ -117,6 +117,9 @@ int test_identical_calculation_identity_is_executed_once() {
     CPPTEST_ASSERT(analyzer.calculations == 1);
     CPPTEST_ASSERT(graph.indicator_value("first", "value", at(1200)) ==
                    graph.indicator_value("second", "value", at(1200)));
+    (void)graph.evaluate(model.entry.condition, at(1200));
+    (void)graph.evaluate(model.entry.condition, at(1200), RunValues{});
+    CPPTEST_ASSERT(analyzer.calculations == 1);
     return 0;
 }
 
@@ -305,6 +308,28 @@ int test_same_count_replacements_use_open_time_and_match_full_replay() {
     return 0;
 }
 
+int test_open_time_moves_dirty_both_old_and_new_bucket_coordinates() {
+    for (const auto replacement : {-60, 3660}) {
+        Analyzer analyzer;
+        auto model = definition();
+        model.indicators = {{"value", "primary", "identity", {}}};
+        model.entry.condition = indicator("value-condition", "value", 0);
+        DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+        auto input = std::vector{bar(0, 600, 10), bar(600, 600, 11), bar(1200, 600, 12)};
+        graph.set_series("primary", input, 1);
+        (void)graph.evaluate_entry();
+        input[1].open_time = at(replacement);
+        input[1].close_time = at(replacement + 600);
+        graph.set_series("primary", input, 2);
+        (void)graph.evaluate_entry();
+        const auto dirty = analyzer.dirty_ranges.back();
+        CPPTEST_ASSERT(dirty);
+        CPPTEST_ASSERT(dirty->begin == at(std::min<std::int64_t>(600, replacement)));
+        CPPTEST_ASSERT(dirty->end > at(std::max<std::int64_t>(600, replacement)));
+    }
+    return 0;
+}
+
 int test_apply_update_dirty_ranges_are_not_seeded_by_history_reset() {
     Analyzer analyzer;
     auto model = definition();
@@ -366,11 +391,16 @@ int test_derived_series_refreshes_and_propagates_bucket_dirty_range() {
                        bar(1800, 600, 13), bar(2400, 600, 14), bar(3000, 600, 15)};
     graph.set_series("primary", source, 1);
     (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").refresh_count == 1);
     CPPTEST_ASSERT(graph.indicator_value("hour-value", "value", at(3600)) == 15);
     const auto key = graph.resolution().series.front().key;
 
     graph.apply({key, Market::Core::Series::BarUpdateKind::AppendClosed, {bar(3600, 600, 20)}});
     (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").refresh_count == 2);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_begin == 6);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_count == 1);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").reused_prefix == 1);
     CPPTEST_ASSERT(analyzer.dirty_ranges.back()->begin == at(3600));
     graph.apply({key, Market::Core::Series::BarUpdateKind::Backfill, {bar(1200, 600, 30)}});
     (void)graph.evaluate_entry();
@@ -569,6 +599,7 @@ int main() {
     CPPTEST_RUN(test_publication_alignment_unknown_stale_and_closed_clock);
     CPPTEST_RUN(test_arrival_order_dirty_replay_and_error_readiness_are_deterministic);
     CPPTEST_RUN(test_same_count_replacements_use_open_time_and_match_full_replay);
+    CPPTEST_RUN(test_open_time_moves_dirty_both_old_and_new_bucket_coordinates);
     CPPTEST_RUN(test_apply_update_dirty_ranges_are_not_seeded_by_history_reset);
     CPPTEST_RUN(test_derived_series_refreshes_and_propagates_bucket_dirty_range);
     CPPTEST_RUN(test_provider_history_and_updates_use_provider_neutral_contracts);

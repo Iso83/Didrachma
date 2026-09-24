@@ -57,6 +57,14 @@ struct Resolution {
     std::vector<ResolutionError> errors;
 };
 
+struct DerivedRefresh {
+    std::size_t refresh_count{};
+    std::size_t source_begin{};
+    std::size_t source_count{};
+    std::size_t reused_prefix{};
+    std::optional<Market::Core::Time::Range> dirty_range;
+};
+
 [[nodiscard]] Resolution resolve(const Definition&, std::optional<std::string_view> subject);
 
 class DataGraph {
@@ -71,6 +79,7 @@ public:
     [[nodiscard]] BindingState state(std::string_view binding_id) const;
     [[nodiscard]] std::size_t unique_series_count() const;
     [[nodiscard]] std::vector<std::string> dependency_order() const;
+    [[nodiscard]] DerivedRefresh derived_refresh(std::string_view binding_id) const;
 
     void set_series(std::string_view binding_id, std::span<const Market::Core::Series::Bar> bars,
                     std::uint64_t revision = 1);

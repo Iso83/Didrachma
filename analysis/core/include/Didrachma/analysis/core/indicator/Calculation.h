@@ -15,7 +15,7 @@ struct CalculationRequest {
     std::span<const Market::Core::Series::Bar> bars;
     std::uint64_t input_revision{};
     std::optional<Market::Core::Time::Range> dirty_range;
-    // Dependency planners may expand the range by required_history before dispatch.
+    // True only when the caller expanded by actual preceding input samples, not elapsed time.
     bool dirty_range_includes_lookback{};
 };
 

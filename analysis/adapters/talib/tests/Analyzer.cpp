@@ -250,6 +250,37 @@ int test_errors_insufficient_history_and_tail() {
     return 0;
 }
 
+int test_irregular_tail_uses_sample_lookback_and_matches_full_replay() {
+    TaLib::Analyzer incremental;
+    TaLib::Analyzer replay;
+    auto input = bars({1, 2, 3, 4, 5});
+    const auto configured = instance("sma");
+    const auto initial = incremental.calculate({configured, input, 1, std::nullopt});
+    const auto old_value = initial.result.outputs[0].samples.back().value;
+
+    input.back().close = input.back().open = input.back().high = input.back().low = 50;
+    const auto dirty = Range{input.back().open_time, *input.back().close_time};
+    const auto updated = incremental.calculate({configured, input, 2, dirty});
+    const auto fresh = replay.calculate({configured, input, 2, std::nullopt});
+    CPPTEST_ASSERT(updated.recalculation == RecalculationKind::Tail);
+    CPPTEST_ASSERT(updated.calculated_input_begin == 2 && updated.calculated_input_count == 3);
+    CPPTEST_ASSERT(updated.reused_prefix_samples == 2);
+    CPPTEST_ASSERT(updated.result.state == CalculationState::Ready);
+    CPPTEST_ASSERT(updated.result.outputs.size() == fresh.result.outputs.size());
+    for (std::size_t output = 0; output < updated.result.outputs.size(); ++output) {
+        CPPTEST_ASSERT(updated.result.outputs[output].output_id == fresh.result.outputs[output].output_id);
+        CPPTEST_ASSERT(updated.result.outputs[output].samples.size() == fresh.result.outputs[output].samples.size());
+        for (std::size_t sample = 0; sample < updated.result.outputs[output].samples.size(); ++sample) {
+            CPPTEST_ASSERT(updated.result.outputs[output].samples[sample].timestamp ==
+                           fresh.result.outputs[output].samples[sample].timestamp);
+            CPPTEST_ASSERT(near(updated.result.outputs[output].samples[sample].value,
+                                fresh.result.outputs[output].samples[sample].value));
+        }
+    }
+    CPPTEST_ASSERT(!near(updated.result.outputs[0].samples.back().value, old_value));
+    return 0;
+}
+
 int test_required_history_uses_native_nontrivial_lookback() {
     TaLib::Analyzer analyzer;
     auto configured = instance("macd");
@@ -333,6 +364,7 @@ int main() {
     CPPTEST_RUN(test_bands_fixture);
     CPPTEST_RUN(test_additional_moving_average_fixtures);
     CPPTEST_RUN(test_errors_insufficient_history_and_tail);
+    CPPTEST_RUN(test_irregular_tail_uses_sample_lookback_and_matches_full_replay);
     CPPTEST_RUN(test_required_history_uses_native_nontrivial_lookback);
     CPPTEST_RUN(test_configuration_and_instance_cache_identity);
     CPPTEST_RUN(test_same_revision_with_replaced_input_cannot_return_stale_cache);
