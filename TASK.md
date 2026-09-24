@@ -105,8 +105,8 @@ Do not replace these foundations with parallel types. Extend them or add small, 
 - [x] Test stable event ids, duplicate suppression, independent configured instances, and profile/workspace round-trip.
 - [x] Test marker placement and clipping without requiring an OpenGL context; keep only the final rendering smoke test behind the existing render-test policy.
 - [x] Build `Didrachma_apps_chart` and `Didrachma_apps_studio`, then run the complete Didrachma CTest suite with `--output-on-failure`.
-- [x] Manual check: choose two pattern-recognition instances in Studio, observe markers in the price panel and matching Analysis Events, then poll through a bar close and confirm the closed-bar marker stays fixed while the new live candle changes.
-  Note: Automated closed-bar, marker, navigation, and render-path checks pass; the interactive poll-through check remains for a desktop session because this environment has no display server.
+- [ ] Manual check: choose two pattern-recognition instances in Studio and observe markers in the price panel with matching Analysis Events.
+- [x] Manual Yahoo polling check: poll through `Forming -> Closed -> next Forming` and confirm the closed-bar marker stays fixed while the new live candle changes.
 
 ### Phase 1 review gate
 
@@ -163,25 +163,25 @@ Stop after the versioned model and persistence are complete. Provide one readabl
 ### Data graph
 
 - [x] Resolve a strategy definition plus optional subject symbol into concrete provider-neutral `Series::Key` values.
-- [x] Build one dependency graph covering series, resampling, indicator instances, pattern events, and strategy conditions across all instruments/timeframes.
-- [x] Determine required warm-up from indicator lookbacks and sequence/rule history before requesting data.
+- [ ] Build one dependency graph covering series, resampling, indicator instances, pattern events, and strategy conditions across all instruments/timeframes.
+- [ ] Determine required warm-up from indicator lookbacks and sequence/rule history before requesting data.
 - [x] Share identical series and calculations between bindings and charts. Use existing provider, queue, `Bars`, revision, dirty-range, and resampling primitives.
-- [x] Support provider-native and derived timeframes without hard-coding Yahoo into the strategy domain.
+- [ ] Support provider-native and derived timeframes without hard-coding Yahoo into the strategy domain.
 - [x] Expose per-binding readiness: loading, ready, stale, insufficient history, provider error, and calculation error.
 
 ### Deterministic evaluation
 
 - [x] Evaluate on an explicit strategy clock driven by newly closed primary bars.
-- [x] Align secondary timeframe/instrument inputs by publication time through the existing closed-value semantics. Missing, stale, or forming inputs produce `Unknown`, not false data and not a guessed value.
+- [ ] Align secondary timeframe/instrument inputs by publication time through the existing closed-value semantics. Missing, stale, or forming inputs produce `Unknown`, not false data and not a guessed value.
 - [x] Define three-valued composition (`True`, `False`, `Unknown`) for every condition group and display evidence for each leaf.
-- [x] Re-evaluate only the dirty dependency tail, while producing the same result as a full replay.
+- [ ] Re-evaluate only the dirty dependency tail, while producing the same result as a full replay.
 - [x] Keep condition evaluation independent of chart visibility and whether a chart window is open.
 
 ### Tests and Phase 3 gate
 
 - [x] Use fake providers to test 10-minute, 1-hour, and daily data for a subject plus a fixed peer.
 - [x] Prove that a later daily close is unavailable to earlier intraday decisions.
-- [x] Test missing/stale secondary data, derived timeframes, duplicate series reuse, dirty-tail equivalence, and deterministic results regardless of update arrival order.
+- [ ] Test missing/stale secondary data, derived timeframes, duplicate series reuse, dirty-tail equivalence, and deterministic results regardless of update arrival order.
 - [x] Run the complete build/CTest phase gate.
 
 ### Phase 3 review gate
@@ -210,7 +210,7 @@ Stop after cross-series conditions can be evaluated headlessly and return eviden
   - if stop and target are both touched within one OHLC bar and order is unknowable, use a documented conservative rule and flag the trade as ambiguous.
 - [x] Support quantity, optional starting capital, fixed/percentage transaction costs, and configurable slippage so net yield/loss is reproducible.
 - [x] Produce a result containing gross and net P/L, return percentage, duration, entry/exit data, drawdown/excursion, trigger counts, adjustment history, and ambiguity/warning flags.
-- [x] A historical replay and the same sequence of live closed-bar updates must produce the same strategy events and final result.
+- [ ] A historical replay and the same sequence of live closed-bar updates must produce the same strategy events and final result.
 
 ### Chart projection
 
@@ -221,7 +221,7 @@ Stop after cross-series conditions can be evaluated headlessly and return eviden
 
 - [x] Test normal target exit, stop exit, gap exit, ambiguous OHLC bar, explicit condition exit, and end-of-range close.
 - [x] Test the requested dynamic cases: adverse volatility lowers the target; unexpectedly favorable progress tightens the stop; later bars use the adjusted values.
-- [x] Test long and short arithmetic, costs/slippage, duration, ROI, audit evidence, restart isolation, and replay/live equivalence.
+- [ ] Test long and short arithmetic, costs/slippage, duration, ROI, audit evidence, restart isolation, and replay/live equivalence.
 - [x] Run the complete build/CTest phase gate.
 
 ### Phase 4 review gate
@@ -239,7 +239,7 @@ Stop after the headless engine produces a complete deterministic run and result.
   - `--from <UTC>` and inclusive `--through <UTC>`;
   - provider selection/configuration without leaking Yahoo types into strategy core.
 - [x] Add optional `--output <json>`, cost/slippage overrides, and a verbose event trace. Reject an override that would make the result non-reproducible without recording it in the report.
-- [x] Resolve every required fixed and subject series, load sufficient warm-up history, run the shared engine, and print:
+- [ ] Resolve every required fixed and subject series, load sufficient warm-up history, run the shared engine, and print:
   - resolved inputs/timeframes;
   - readiness/errors;
   - entry, stop/target adjustments, and exit triggers;
@@ -267,10 +267,10 @@ Stop after showing the exact CLI command and its deterministic summary/JSON outp
 - [x] Console output, typed JSON fields, exit-code classes, and diagnostics are tested.
 - [x] Strict UTC parsing is tested.
 - [x] Unique-series loading and actual-bar-count warm-up are tested.
-- [x] The JSON report contains the complete auditable strategy result.
+- [ ] The JSON report contains the complete auditable strategy result.
 - [x] `Didrachma_apps_chart`, `Didrachma_apps_studio`, and `Didrachma_apps_strategy` build successfully.
 - [x] The complete Didrachma CTest suite passes with `--output-on-failure`.
-- [x] Confirm the compiled test target is visible and directly runnable in a generated Visual Studio solution.
+- [ ] Confirm the compiled test target is visible and directly runnable in a generated Visual Studio solution.
   Note: CMake generates a standalone `Test_Didrachma_apps_strategy_EndToEnd` executable target in the
   `apps/strategy` test module, but Visual Studio is unavailable in this Linux environment for the final UI check.
 
@@ -290,13 +290,18 @@ Review of the implementation found these concrete semantic gaps:
 - Studio does not call the Phase 5 loading/range workflow at all. Its strategy start path opens charts with the fixed
   demonstration range `1700000000..1700086400` instead of a user-selected backtest range.
 
-Do not continue the broad Phase 6 UI work until gates 5R.1A through 5R.3 are complete. Work on exactly one gate per
+Do not continue the broad Phase 6 UI work until gates 5R.1A through 5R.4C are complete. Work on exactly one gate per
 review cycle, update only that gate's checkboxes, report changed files and test output, then stop for review. If blocked,
 report the precise blocker instead of doing unrelated refactors.
 
-**Current next task: Gate 5R.1A only. Do not modify Runtime, CLI, Studio/ImGui, or start a later gate in the same pass.**
+The implementation of 5R.1A through 5R.3 exists, but the trust review below reopened Phase 3 and final Phase 5
+acceptance. Completed checkboxes in those earlier corrective gates describe retained implementation; they do not override
+the open 5R.4 gates.
 
-#### Gate 5R.1A — Correct the persisted domain contract (next task)
+**Current next task: Gate 5R.4A only. Do not modify Studio/ImGui, Phase 6, `extern/`, or start 5R.4B/5R.4C in the same
+pass.**
+
+#### Gate 5R.1A — Correct the persisted domain contract
 
 - [x] Document and implement these separate concepts in UI-independent code:
   - `Strategy::Core::Definition`: reusable rules; no ticker chosen for a `Subject` binding and no backtest dates;
@@ -368,8 +373,96 @@ report the precise blocker instead of doing unrelated refactors.
   fill and is not mislabeled as “no signal”.
 - [x] Add an opt-in Yahoo smoke command for AAPL using a supported timeframe and valid historical range. Network access
   remains outside default CTest, but the exact command and expected input summary must be reported.
-- [x] Build `Didrachma_apps_strategy`, run its compiled CTest target and the complete offline CTest suite, show one full
+- [ ] Build `Didrachma_apps_strategy`, run its compiled CTest target and the complete offline CTest suite, show one full
   JSON report, and stop for review. Only after approval may Phase 6 resume.
+
+### Phase 5 trust review — acceptance reopened on 2026-09-24
+
+The realistic CLI fixture and shared runner are retained, but source review found correctness paths that the green tests
+do not exercise:
+
+- `DataGraph` currently converts TA-Lib output from a `Forming` bar into a `TimedValue` with `closed=true` and makes it
+  available at the bar's open timestamp. A secondary forming indicator or pattern can therefore influence a closed
+  primary-bar decision.
+- `maximum_data_age` is enforced for direct market comparisons but not for indicator comparisons, crosses, or pattern
+  occurrences.
+- dirty detection and derived-series maintenance are incomplete; the tests do not prove high/low/open/volume-only
+  corrections or continued derivation after source updates.
+- warm-up/dependency calculation covers only part of the definition, uses parameter heuristics instead of the analyzer's
+  effective lookback, and may report `Ready` when an analyzer returned `InsufficientHistory`.
+- every positive fill-model version is accepted although only model 1 exists.
+- the JSON report refers to a mutable strategy file but does not contain the immutable strategy snapshot or an
+  equivalent content-addressed identity.
+
+Fix these in the three gates below. Work test-first, preserve the accepted entry/fill behavior, and do not redesign the
+strategy editor. At the end of each gate, update only that gate, report exact changed files and commands, and stop for
+review.
+
+#### Gate 5R.4A — Enforce closed and non-stale strategy inputs (current task)
+
+Scope: `strategy/core` evaluation plus the smallest required analysis-core/adapter contract change. Do not change
+Runtime fill behavior, CLI presentation, Studio/ImGui, Phase 6, or `extern/`.
+
+- [x] Add a deterministic regression test with a closed primary bar and a secondary `Forming` bar whose continuous
+  indicator output would otherwise make an entry condition true. The indicator leaf must remain `Unknown` until that
+  exact secondary bar closes.
+- [x] Add the equivalent regression for `PatternOccurrence`: a non-zero output on a secondary forming candle must not
+  advance a sequence or arm an entry; closing it may publish exactly one usable occurrence.
+- [x] Preserve the source bar's closed/forming state when materializing indicator values. A forming sample must never be
+  passed to `align_closed()` as closed and must not use its open timestamp as publication time.
+- [x] Apply the source `SeriesBinding::maximum_data_age` policy consistently to `IndicatorComparison`, both sides of
+  `IndicatorCross`, and `PatternOccurrence`. Missing, stale, or forming inputs return `Unknown` with actionable evidence.
+- [x] Add tests for stale direct-market, indicator, cross, and pattern leaves using the same secondary binding and prove
+  that fresh closed values still evaluate normally.
+- [x] Run only the affected analysis/core and strategy/core evaluation tests. Report the failing tests before the fix,
+  the passing commands after the fix, changed files, and any compatibility decision; then stop for review.
+
+#### Gate 5R.4B — Repair invalidation, derivation, warm-up and readiness
+
+Do not start this gate until 5R.4A is reviewed. Do not change Runtime fills, CLI presentation, Studio/ImGui, Phase 6, or
+`extern/`.
+
+- [ ] Make same-count replacement detection compare every decision-relevant bar field: open/close timestamp, state,
+  open, high, low, close, and volume. Determine the earliest changed timestamp and preserve an explicit dirty range.
+- [ ] Add separate regression cases for high-only, low-only, open-only, volume-only, close-time, `Backfill`, and `Reset`
+  corrections. Each incremental result must equal a fresh full replay.
+- [ ] Make derived-series relationships part of the dependency graph. A source append, forming replacement, backfill, or
+  reset must refresh the affected derived tail automatically; a one-time manual `derive_series()` call is insufficient.
+- [ ] Pass the propagated dirty range into indicator calculation and recompute only the affected dependency tail. Add
+  instrumentation/assertions proving unchanged prefixes are reused rather than merely comparing final values.
+- [ ] Register entry, explicit exit, and runtime-rule condition trees in the dependency graph. Include sequence limits
+  and rule history from all three areas in warm-up planning.
+- [ ] Replace integer-parameter lookback guessing with an analyzer-owned required-history/lookback contract. Keep
+  TA-Lib-specific discovery in the adapter, not in strategy/core.
+- [ ] Propagate analyzer `InsufficientHistory` to binding readiness and to the runner's structured
+  `InsufficientWarmup` failure. Never report such a binding as `Ready` and silently continue with `Unknown`.
+- [ ] Preserve one provider load/calculation for identical resolved keys while repairing derived inputs.
+- [ ] Run the affected analysis/core, TA-Lib adapter, strategy evaluation, and backtest-runner tests. Report commands,
+  changed files, load/calculation counts, and any remaining performance risk; then stop for review.
+
+#### Gate 5R.4C — Re-accept runtime equivalence and the auditable CLI report
+
+Do not start this gate until 5R.4B is reviewed. Do not change Studio/ImGui or Phase 6.
+
+- [ ] Reject every unsupported `fill_model_version` before provider loading. Version 1 remains the only accepted version
+  until another fill implementation exists; add request, runner, repository, CLI-exit, and diagnostic tests.
+- [ ] Make the versioned JSON report self-contained by storing the exact immutable strategy snapshot used by the run, or
+  a content-addressed equivalent that cannot be confused after the source file changes. Keep the readable source path as
+  optional presentation metadata only.
+- [ ] Compare full replay with incremental closed-bar processing field by field: state, entry status, exit reason,
+  timestamps, prices, P/L, ROI, duration, excursions, warnings, trigger counts, ordered audit events including evidence,
+  and projection data. Comparing only event count and P/L is insufficient.
+- [ ] Add a regression in which forming updates occur between closed updates and prove they cannot add, remove, or rewrite
+  committed decisions. Historical correction remains possible only through explicit `Backfill`/`Reset` and must be
+  identifiable in revision/audit data.
+- [ ] Re-run the realistic subject + fixed-peer CLI fixture and the direct-runner comparison. Show the complete report
+  and prove it contains the immutable strategy identity plus all execution assumptions.
+- [ ] Build `Didrachma_apps_chart`, `Didrachma_apps_studio`, and `Didrachma_apps_strategy`; run the complete offline CTest
+  suite with `--output-on-failure`.
+- [ ] On Windows, confirm `Test_Didrachma_apps_strategy_EndToEnd` is visible and directly runnable in the generated Visual
+  Studio solution. Leave this item open if it was not actually observed.
+- [ ] Update the reopened Phase 3, Phase 4, and Phase 5 checkboxes only when their exact contracts are now proven. Report
+  remaining manual checks and stop for user approval. Do not begin Gate 6A in the same pass.
 
 ---
 

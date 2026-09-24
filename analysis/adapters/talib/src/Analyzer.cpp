@@ -111,6 +111,20 @@ std::vector<Definition> Analyzer::catalog() const {
     return Intern::catalog();
 }
 
+std::size_t Analyzer::required_history(const Instance& instance) const {
+    const auto definitions = Intern::catalog();
+    const auto definition = std::ranges::find(definitions, instance.definition_id, &Definition::id);
+    if (definition == definitions.end() || validate_parameters(*definition, instance.parameters))
+        return 1;
+
+    const auto* adapter = Intern::descriptor(instance.definition_id);
+    if (!adapter)
+        return 1;
+
+    const auto value = Intern::lookback(*adapter, instance);
+    return value < 0 ? 1 : static_cast<std::size_t>(value + 1);
+}
+
 CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
     Intern::Runtime::instance();
     auto& cache = m_impl->instances[request.instance.id];

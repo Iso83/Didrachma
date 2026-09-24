@@ -14,7 +14,24 @@ using Timestamp = Market::Core::Time::UtcTimestamp;
 class Analyzer final : public Analysis::Core::Indicator::Analyzer {
 public:
     std::vector<Analysis::Core::Indicator::Definition> catalog() const override {
-        return {};
+        using namespace Analysis::Core::Indicator;
+        return {{"identity", "Identity", {}, {{"value", "Value"}}},
+                {"pattern",
+                 "Pattern",
+                 {},
+                 {{"value", "Value", VisualKind::Marker}},
+                 {},
+                 {},
+                 PaneHint::PriceOverlay,
+                 RangeHint::Derived,
+                 {},
+                 {},
+                 Capability::AnalysisEvent}};
+    }
+
+    std::size_t required_history(const Analysis::Core::Indicator::Instance& instance) const override {
+        const auto found = instance.parameters.find("period");
+        return found == instance.parameters.end() ? 1 : static_cast<std::size_t>(std::get<std::int64_t>(found->second));
     }
 
     Analysis::Core::Indicator::CalculationOutcome
@@ -26,10 +43,9 @@ public:
                                             : Analysis::Core::Indicator::CalculationState::Ready;
         Analysis::Core::Indicator::OutputSeries output{"value"};
         for (const auto& bar : request.bars)
-            if (bar.state == Market::Core::Series::BarState::Closed)
-                output.samples.push_back({bar.open_time, request.instance.definition_id == "pattern"
-                                                             ? (bar.close > bar.open ? 100.0 : 0.0)
-                                                             : bar.close});
+            output.samples.push_back({bar.open_time, request.instance.definition_id == "pattern"
+                                                         ? (bar.close > bar.open ? 100.0 : 0.0)
+                                                         : bar.close});
         result.outputs.push_back(std::move(output));
         return {std::move(result), Analysis::Core::Indicator::RecalculationKind::Full};
     }
@@ -69,6 +85,30 @@ std::shared_ptr<ConditionExpression> market(std::string id, std::string series, 
     value->id = std::move(id);
     value->kind = ConditionKind::MarketComparison;
     value->predicate = MarketComparison{std::move(series), MarketField::Close, Comparison::Greater, threshold};
+    return value;
+}
+
+std::shared_ptr<ConditionExpression> indicator(std::string id, std::string binding, double threshold) {
+    auto value = std::make_shared<ConditionExpression>();
+    value->id = std::move(id);
+    value->kind = ConditionKind::IndicatorComparison;
+    value->predicate = IndicatorComparison{std::move(binding), "value", Comparison::Greater, threshold};
+    return value;
+}
+
+std::shared_ptr<ConditionExpression> pattern(std::string id, std::string binding) {
+    auto value = std::make_shared<ConditionExpression>();
+    value->id = std::move(id);
+    value->kind = ConditionKind::PatternOccurrence;
+    value->predicate = PatternOccurrence{std::move(binding), Direction::Long};
+    return value;
+}
+
+std::shared_ptr<ConditionExpression> cross(std::string id, std::string left, std::string right) {
+    auto value = std::make_shared<ConditionExpression>();
+    value->id = std::move(id);
+    value->kind = ConditionKind::IndicatorCross;
+    value->predicate = IndicatorCross{std::move(left), "value", std::move(right), "value", {}, CrossDirection::Above};
     return value;
 }
 
@@ -173,6 +213,9 @@ int test_provider_history_and_updates_use_provider_neutral_contracts() {
     CPPTEST_ASSERT(peer_provider.loads == 1 && graph.resolution().series[2].derived);
     CPPTEST_ASSERT(graph.evaluate_entry().size() == 4);
 
+    graph.apply({key, Market::Core::Series::BarUpdateKind::AppendClosed, {bar(2400, 600, 15), bar(3000, 600, 16)}});
+    CPPTEST_ASSERT(graph.state("hourly").available_history == 1);
+
     DataGraph stale(Snapshot{definition()}, analyzer, "AAPL");
     const std::vector late_primary{bar(3 * 86400, 600, 20), bar(3 * 86400 + 600, 600, 21),
                                    bar(3 * 86400 + 1200, 600, 22)};
@@ -182,10 +225,93 @@ int test_provider_history_and_updates_use_provider_neutral_contracts() {
     return 0;
 }
 
+int test_forming_indicator_is_unknown_until_the_source_bar_closes() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.indicators.push_back({"peer-value", "peer", "identity", {}});
+    model.entry.condition = indicator("peer-indicator", "peer-value", 50);
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.set_series("primary", std::vector{bar(0, 600, 20), bar(600, 600, 21)});
+    graph.set_series("peer", std::vector{bar(-85200, 86400, 60, Market::Core::Series::BarState::Forming)});
+
+    const auto forming = graph.evaluate_entry();
+    CPPTEST_ASSERT(forming.back().truth == Truth::Unknown);
+    CPPTEST_ASSERT(forming.back().evidence.front().detail == "closed indicator input is unavailable");
+    graph.set_series("peer", std::vector{bar(-85200, 86400, 60)}, 2);
+    const auto closed = graph.evaluate_entry();
+    CPPTEST_ASSERT(closed.back().truth == Truth::True);
+    CPPTEST_ASSERT(closed.back().evidence.front().source_time == at(1200));
+    return 0;
+}
+
+int test_forming_pattern_cannot_advance_sequence_and_closed_occurrence_is_consumed_once() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series[3].maximum_data_age.reset();
+    model.indicators.push_back({"peer-pattern", "peer", "pattern", {}});
+    auto sequence = std::make_shared<ConditionExpression>();
+    sequence->id = "pattern-then-price";
+    sequence->kind = ConditionKind::Sequence;
+    sequence->children = {pattern("peer-occurrence", "peer-pattern"), market("confirmation", "primary", 10)};
+    model.entry.condition = sequence;
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.set_series("primary", std::vector{bar(0, 600, 20), bar(600, 600, 21), bar(1200, 600, 22)});
+    graph.set_series("peer", std::vector{bar(-85200, 86400, 60, Market::Core::Series::BarState::Forming)});
+
+    const auto forming = graph.evaluate_entry();
+    CPPTEST_ASSERT(std::ranges::count(forming, Truth::True, &Evaluation::truth) == 0);
+    CPPTEST_ASSERT(forming[1].truth == Truth::Unknown);
+    CPPTEST_ASSERT(std::ranges::any_of(forming[1].evidence, [](const auto& item) {
+        return item.condition_id == "peer-occurrence" && item.detail == "closed pattern input is unavailable";
+    }));
+    graph.set_series("peer", std::vector{bar(-85200, 86400, 60)}, 2);
+    const auto closed = graph.evaluate_entry();
+    CPPTEST_ASSERT(std::ranges::count(closed, Truth::True, &Evaluation::truth) == 1);
+    CPPTEST_ASSERT(closed.back().truth == Truth::True);
+    CPPTEST_ASSERT(std::ranges::count(graph.evaluate_entry(), Truth::True, &Evaluation::truth) == 1);
+    return 0;
+}
+
+int test_secondary_freshness_applies_to_market_indicator_cross_and_pattern_leaves() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series[3].maximum_data_age = 5min;
+    model.indicators = {{"primary-value", "primary", "identity", {}},
+                        {"peer-value", "peer", "identity", {}},
+                        {"peer-pattern", "peer", "pattern", {}}};
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.set_series("primary", std::vector{bar(0, 600, 40), bar(600, 600, 70), bar(1200, 600, 80)});
+    graph.set_series("peer", std::vector{bar(-85800, 86400, 50), bar(600, 600, 60)});
+
+    const auto assert_fresh_then_stale = [&](const std::shared_ptr<ConditionExpression>& condition,
+                                             std::string_view stale_detail) -> int {
+        const auto fresh = graph.evaluate(condition, at(1200));
+        CPPTEST_ASSERT(fresh.truth != Truth::Unknown);
+        CPPTEST_ASSERT(!fresh.evidence.empty() && fresh.evidence.front().source_time == at(1200));
+        const auto stale = graph.evaluate(condition, at(1800));
+        CPPTEST_ASSERT(stale.truth == Truth::Unknown);
+        CPPTEST_ASSERT(!stale.evidence.empty() && stale.evidence.front().detail == stale_detail);
+        return 0;
+    };
+    CPPTEST_ASSERT(assert_fresh_then_stale(market("peer-market", "peer", 40), "input is stale") == 0);
+    CPPTEST_ASSERT(assert_fresh_then_stale(indicator("peer-indicator", "peer-value", 40), "indicator input is stale") ==
+                   0);
+    CPPTEST_ASSERT(
+        assert_fresh_then_stale(cross("stale-left", "peer-value", "primary-value"), "left cross input is stale") == 0);
+    CPPTEST_ASSERT(assert_fresh_then_stale(cross("stale-right", "primary-value", "peer-value"),
+                                           "right cross input is stale") == 0);
+    CPPTEST_ASSERT(
+        assert_fresh_then_stale(pattern("peer-pattern-occurrence", "peer-pattern"), "pattern input is stale") == 0);
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_resolution_warmup_graph_reuse_and_derived_timeframe);
     CPPTEST_RUN(test_publication_alignment_unknown_stale_and_closed_clock);
     CPPTEST_RUN(test_arrival_order_dirty_replay_and_error_readiness_are_deterministic);
     CPPTEST_RUN(test_provider_history_and_updates_use_provider_neutral_contracts);
+    CPPTEST_RUN(test_forming_indicator_is_unknown_until_the_source_bar_closes);
+    CPPTEST_RUN(test_forming_pattern_cannot_advance_sequence_and_closed_occurrence_is_consumed_once);
+    CPPTEST_RUN(test_secondary_freshness_applies_to_market_indicator_cross_and_pattern_leaves);
     return 0;
 }

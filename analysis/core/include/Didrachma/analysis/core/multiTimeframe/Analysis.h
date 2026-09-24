@@ -31,7 +31,7 @@ struct TimedValue {
 [[nodiscard]] const TimedValue* align_closed(std::span<const TimedValue> values,
                                              Market::Core::Time::UtcTimestamp evaluation_time);
 
-enum class NodeKind { Series, Indicator, Condition };
+enum class NodeKind { Series, Resampling, Indicator, PatternEvent, Condition };
 
 struct Node {
     std::string id;

@@ -18,6 +18,7 @@ public:
     Analyzer& operator=(Analyzer&&) noexcept;
 
     [[nodiscard]] std::vector<Core::Indicator::Definition> catalog() const override;
+    [[nodiscard]] std::size_t required_history(const Core::Indicator::Instance&) const override;
     Core::Indicator::CalculationOutcome calculate(const Core::Indicator::CalculationRequest& request) override;
 };
 } // namespace Didrachma::Analysis::Adapters::TaLib
