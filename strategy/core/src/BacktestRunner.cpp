@@ -6,6 +6,7 @@ namespace Didrachma::Strategy::Core::Intern {
 struct LoadGroup {
     Market::Core::Series::Key key;
     std::vector<std::string> binding_ids;
+    std::vector<std::string> dependent_binding_ids;
     std::size_t required{};
 };
 
@@ -25,11 +26,27 @@ Duration backtest_frame_duration(Market::Core::Time::Frame frame) {
 std::vector<LoadGroup> load_plan(const DataGraph& graph) {
     std::map<std::string, LoadGroup> grouped;
     for (const auto& resolved : graph.resolution().series) {
+        if (resolved.derived)
+            continue;
         auto& group = grouped[backtest_key_text(resolved.key)];
         group.key = resolved.key;
         group.binding_ids.push_back(resolved.binding_id);
         group.required =
             std::max(group.required, std::max<std::size_t>(graph.required_history(resolved.binding_id), 1));
+    }
+    for (const auto& resolved : graph.resolution().series) {
+        auto source = &resolved;
+        while (source->derived && source->source_binding_id) {
+            const auto found =
+                std::ranges::find(graph.resolution().series, *source->source_binding_id, &ResolvedSeries::binding_id);
+            if (found == graph.resolution().series.end())
+                break;
+
+            source = &*found;
+        }
+        auto group = grouped.find(backtest_key_text(source->key));
+        if (group != grouped.end())
+            group->second.dependent_binding_ids.push_back(resolved.binding_id);
     }
     std::vector<LoadGroup> result;
     for (auto& [key, group] : grouped) {
@@ -89,12 +106,6 @@ BacktestOutcome BacktestRunner::run(const BacktestRequest& request, Market::Core
                  "Series provider does not match the requested provider");
             return outcome;
         }
-
-        if (!supported(binding.timeframe, supported_timeframes)) {
-            fail(outcome, BacktestErrorCode::UnsupportedTimeframe,
-                 "/strategy/series/" + std::to_string(index) + "/timeframe", "Provider does not support timeframe");
-            return outcome;
-        }
     }
 
     DataGraph graph{Snapshot{request.strategy_snapshot}, *m_analyzer, request.subject_symbol};
@@ -104,6 +115,44 @@ BacktestOutcome BacktestRunner::run(const BacktestRequest& request, Market::Core
             outcome.errors.push_back({BacktestErrorCode::UnresolvedSubject, error.binding_id, error.message});
         transition(outcome, BacktestStatus::Failed);
         return outcome;
+    }
+
+    // Prefer provider-native inputs. An unsupported target may be constructed only
+    // from another resolved binding for the same concrete instrument/provider.
+    for (std::size_t index = 0; index < request.strategy_snapshot.series.size(); ++index) {
+        const auto& target = request.strategy_snapshot.series[index];
+        if (supported(target.timeframe, supported_timeframes))
+            continue;
+
+        const auto resolved_target =
+            std::ranges::find(graph.resolution().series, target.id, &ResolvedSeries::binding_id);
+        const SeriesBinding* selected{};
+        Duration selected_duration{};
+        if (resolved_target != graph.resolution().series.end())
+            for (const auto& candidate : request.strategy_snapshot.series) {
+                const auto resolved_candidate =
+                    std::ranges::find(graph.resolution().series, candidate.id, &ResolvedSeries::binding_id);
+                const auto candidate_duration = backtest_frame_duration(candidate.timeframe);
+                const auto target_duration = backtest_frame_duration(target.timeframe);
+                if (resolved_candidate == graph.resolution().series.end() || candidate.id == target.id ||
+                    resolved_candidate->key.provider != resolved_target->key.provider ||
+                    resolved_candidate->key.instrument != resolved_target->key.instrument ||
+                    !supported(candidate.timeframe, supported_timeframes) || candidate_duration >= target_duration ||
+                    target_duration % candidate_duration != Duration::zero())
+                    continue;
+
+                if (!selected || candidate_duration > selected_duration) {
+                    selected = &candidate;
+                    selected_duration = candidate_duration;
+                }
+            }
+        if (!selected) {
+            fail(outcome, BacktestErrorCode::UnsupportedTimeframe,
+                 "/strategy/series/" + std::to_string(index) + "/timeframe",
+                 "Provider does not support timeframe and no resolved source can derive it");
+            return outcome;
+        }
+        graph.derive_series(target.id, selected->id);
     }
 
     for (const auto& resolved : graph.resolution().series)
@@ -143,7 +192,16 @@ BacktestOutcome BacktestRunner::run(const BacktestRequest& request, Market::Core
                 return bar.state == Market::Core::Series::BarState::Closed && bar.close_time &&
                        *bar.close_time < request.from;
             });
-            if (bars.size() >= group.required && warmup_bars >= group.required - 1) {
+            const auto dependencies_ready = std::ranges::all_of(group.dependent_binding_ids, [&](const auto& id) {
+                const auto required = graph.required_history(id);
+                const auto dependent = graph.series_bars(id);
+                const auto dependent_warmup = std::ranges::count_if(dependent, [&](const auto& bar) {
+                    return bar.state == Market::Core::Series::BarState::Closed && bar.close_time &&
+                           *bar.close_time < request.from;
+                });
+                return dependent.size() >= required && dependent_warmup >= required - 1;
+            });
+            if (bars.size() >= group.required && warmup_bars >= group.required - 1 && dependencies_ready) {
                 ready = true;
                 break;
             }

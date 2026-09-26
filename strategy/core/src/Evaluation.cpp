@@ -100,6 +100,7 @@ struct DataGraph::Implementation {
         Market::Core::Series::Key key;
         std::vector<Intern::Bar> bars;
         std::uint64_t revision{};
+        std::uint64_t content_generation{};
         std::string error;
     };
     struct IndicatorData {
@@ -111,7 +112,8 @@ struct DataGraph::Implementation {
         std::string definition;
         std::map<std::string, Analysis::Core::Indicator::ParameterValue> parameters;
         std::uint64_t revision{};
-        Analysis::Core::Indicator::Result result;
+        std::uint64_t content_generation{};
+        Analysis::Core::Indicator::CalculationOutcome outcome;
     };
 
     Snapshot snapshot;
@@ -128,6 +130,7 @@ struct DataGraph::Implementation {
     std::optional<Market::Core::Time::Range> dirty_range;
     std::map<std::string, Market::Core::Time::Range> node_dirty;
     std::map<std::string, DerivedRefresh> derived_refreshes;
+    std::map<std::string, IndicatorRefresh> indicator_refreshes;
 
     Implementation(Snapshot value, Analysis::Core::Indicator::Analyzer& analysis, std::optional<std::string> subject)
         : snapshot(std::move(value)), analyzer(&analysis),
@@ -167,6 +170,12 @@ struct DataGraph::Implementation {
         return analyzer->required_history({binding.id, binding.definition_id, true, binding.parameters});
     }
 
+    const IndicatorBinding* indicator_binding(std::string_view id) const {
+        const auto& items = snapshot.definition().indicators;
+        const auto found = std::ranges::find(items, id, &IndicatorBinding::id);
+        return found == items.end() ? nullptr : &*found;
+    }
+
     void add_conditions(const std::shared_ptr<ConditionExpression>& condition) {
         if (!condition)
             return;
@@ -191,55 +200,131 @@ struct DataGraph::Implementation {
                    std::move(dependencies)});
     }
 
-    std::size_t required(std::string_view binding_id) const {
-        std::size_t indicator_required{1};
-        for (const auto& indicator : snapshot.definition().indicators)
-            if (indicator.series_id == binding_id)
-                indicator_required = std::max(indicator_required, indicator_history(indicator));
-        for (const auto& [target_id, source_id] : derived_from) {
-            if (source_id != binding_id)
-                continue;
-
-            const auto* source = series_binding(source_id);
-            const auto* target = series_binding(target_id);
-            if (!source || !target)
-                continue;
-
-            std::size_t target_required{1};
-            for (const auto& indicator : snapshot.definition().indicators)
-                if (indicator.series_id == target_id)
-                    target_required = std::max(target_required, indicator_history(indicator));
-            const auto ratio = Intern::frame_duration(target->timeframe) / Intern::frame_duration(source->timeframe);
-            indicator_required = std::max(indicator_required, target_required * static_cast<std::size_t>(ratio));
+    std::map<std::string, std::size_t> direct_requirements() const {
+        std::map<std::string, std::size_t> indicator_required;
+        std::map<std::string, std::size_t> sequence_required;
+        for (const auto& binding : snapshot.definition().series) {
+            indicator_required[binding.id] = 1;
+            sequence_required[binding.id] = 1;
         }
-        std::size_t sequence_required{1};
+        for (const auto& indicator : snapshot.definition().indicators)
+            indicator_required[indicator.series_id] =
+                std::max(indicator_required[indicator.series_id], indicator_history(indicator));
+
         const auto* primary = series_binding(snapshot.definition().primary_series_id);
         const auto frame = primary ? Intern::frame_duration(primary->timeframe) : std::chrono::seconds{1};
-        const auto sequence_history = [&](const auto& self,
-                                          const std::shared_ptr<ConditionExpression>& condition) -> void {
+        const auto sequence_history = [&](const auto& self, const std::shared_ptr<ConditionExpression>& condition,
+                                          std::chrono::seconds window) -> void {
             if (!condition)
                 return;
 
-            if (condition->kind == ConditionKind::Sequence && condition->sequence.maximum_closed_bars)
-                sequence_required =
-                    std::max(sequence_required, static_cast<std::size_t>(*condition->sequence.maximum_closed_bars));
-            if (condition->kind == ConditionKind::Sequence && condition->sequence.maximum_elapsed) {
-                const auto elapsed = condition->sequence.maximum_elapsed->count();
-                const auto bars = static_cast<std::size_t>((elapsed + frame.count() - 1) / frame.count());
-                sequence_required = std::max(sequence_required, bars);
+            if (condition->kind == ConditionKind::Sequence) {
+                if (condition->sequence.maximum_closed_bars)
+                    window =
+                        std::max(window, frame * static_cast<std::int64_t>(*condition->sequence.maximum_closed_bars));
+                if (condition->sequence.maximum_elapsed)
+                    window = std::max(window, *condition->sequence.maximum_elapsed);
+            }
+
+            std::vector<std::string_view> dependencies;
+            if (const auto* value = std::get_if<MarketComparison>(&condition->predicate))
+                dependencies.push_back(value->series_id);
+            if (const auto* value = std::get_if<IndicatorComparison>(&condition->predicate))
+                if (const auto* binding = indicator_binding(value->indicator_id))
+                    dependencies.push_back(binding->series_id);
+            if (const auto* value = std::get_if<IndicatorCross>(&condition->predicate)) {
+                if (const auto* binding = indicator_binding(value->left_indicator_id))
+                    dependencies.push_back(binding->series_id);
+                if (value->right_indicator_id)
+                    if (const auto* binding = indicator_binding(*value->right_indicator_id))
+                        dependencies.push_back(binding->series_id);
+            }
+            if (const auto* value = std::get_if<PatternOccurrence>(&condition->predicate))
+                if (const auto* binding = indicator_binding(value->indicator_id))
+                    dependencies.push_back(binding->series_id);
+            for (const auto id : dependencies) {
+                const auto* binding = series_binding(id);
+                if (!binding || window == std::chrono::seconds::zero())
+                    continue;
+
+                const auto duration = Intern::frame_duration(binding->timeframe);
+                const auto bars = static_cast<std::size_t>((window.count() + duration.count() - 1) / duration.count());
+                sequence_required[std::string{id}] = std::max(sequence_required[std::string{id}], bars);
+            }
+            for (const auto& child : condition->children)
+                self(self, child, window);
+        };
+        const auto collect = [&](const std::shared_ptr<ConditionExpression>& condition) {
+            sequence_history(sequence_history, condition, std::chrono::seconds::zero());
+        };
+        collect(snapshot.definition().entry.condition);
+        for (const auto& item : snapshot.definition().exits)
+            collect(item.condition);
+        for (const auto& item : snapshot.definition().runtime_rules)
+            collect(item.condition);
+
+        // A sequence is advanced on the primary closed-bar clock even when all
+        // of its leaves use secondary bindings.
+        std::size_t primary_sequence{1};
+        const auto primary_history = [&](const auto& self,
+                                         const std::shared_ptr<ConditionExpression>& condition) -> void {
+            if (!condition)
+                return;
+            if (condition->kind == ConditionKind::Sequence) {
+                if (condition->sequence.maximum_closed_bars)
+                    primary_sequence =
+                        std::max(primary_sequence, static_cast<std::size_t>(*condition->sequence.maximum_closed_bars));
+                if (condition->sequence.maximum_elapsed) {
+                    const auto elapsed = condition->sequence.maximum_elapsed->count();
+                    primary_sequence = std::max(
+                        primary_sequence, static_cast<std::size_t>((elapsed + frame.count() - 1) / frame.count()));
+                }
             }
             for (const auto& child : condition->children)
                 self(self, child);
         };
-        if (binding_id == snapshot.definition().primary_series_id) {
-            sequence_history(sequence_history, snapshot.definition().entry.condition);
-            for (const auto& item : snapshot.definition().exits)
-                sequence_history(sequence_history, item.condition);
-            for (const auto& item : snapshot.definition().runtime_rules)
-                sequence_history(sequence_history, item.condition);
-        }
+        primary_history(primary_history, snapshot.definition().entry.condition);
+        for (const auto& item : snapshot.definition().exits)
+            primary_history(primary_history, item.condition);
+        for (const auto& item : snapshot.definition().runtime_rules)
+            primary_history(primary_history, item.condition);
+        sequence_required[snapshot.definition().primary_series_id] =
+            std::max(sequence_required[snapshot.definition().primary_series_id], primary_sequence);
 
-        return indicator_required + sequence_required - 1;
+        std::map<std::string, std::size_t> result;
+        for (const auto& binding : snapshot.definition().series)
+            result[binding.id] = indicator_required[binding.id] + sequence_required[binding.id] - 1;
+        return result;
+    }
+
+    std::size_t required(std::string_view binding_id) const {
+        const auto direct = direct_requirements();
+        const auto required_for = [&](const auto& self, std::string_view id,
+                                      std::set<std::string>& visiting) -> std::size_t {
+            if (!visiting.insert(std::string{id}).second)
+                return 1;
+
+            auto result = direct.contains(std::string{id}) ? direct.at(std::string{id}) : 1;
+            const auto* source = series_binding(id);
+            if (source)
+                for (const auto& [target_id, source_id] : derived_from) {
+                    if (source_id != id)
+                        continue;
+
+                    const auto* target = series_binding(target_id);
+                    if (!target)
+                        continue;
+
+                    const auto ratio =
+                        Intern::frame_duration(target->timeframe) / Intern::frame_duration(source->timeframe);
+                    result = std::max(result, self(self, target_id, visiting) * static_cast<std::size_t>(ratio));
+                }
+            visiting.erase(std::string{id});
+            return result;
+        };
+
+        std::set<std::string> visiting;
+        return required_for(required_for, binding_id, visiting);
     }
 
     void merge_dirty(const std::string& source, Market::Core::Time::Range range) {
@@ -262,11 +347,17 @@ struct DataGraph::Implementation {
             auto& destination = indicators[binding.id];
             const auto reused = std::ranges::find_if(shared_calculations, [&](const auto& item) {
                 return item.source == found->second.get() && item.definition == binding.definition_id &&
-                       item.parameters == binding.parameters && item.revision == found->second->revision;
+                       item.parameters == binding.parameters && item.revision == found->second->revision &&
+                       item.content_generation == found->second->content_generation;
             });
-            if (reused != shared_calculations.end())
-                destination.result = reused->result;
-            else {
+            if (reused != shared_calculations.end()) {
+                destination.result = reused->outcome.result;
+                indicator_refreshes[binding.id] = {reused->outcome.recalculation,
+                                                   reused->outcome.calculated_input_begin,
+                                                   reused->outcome.calculated_input_count,
+                                                   reused->outcome.reused_prefix_samples,
+                                                   {}};
+            } else {
                 Analysis::Core::Indicator::Instance instance{binding.id, binding.definition_id, true,
                                                              binding.parameters};
                 const auto dirty = node_dirty.find("indicator:" + binding.id);
@@ -275,13 +366,19 @@ struct DataGraph::Implementation {
                                          dirty == node_dirty.end() ? std::optional<Market::Core::Time::Range>{}
                                                                    : std::optional{dirty->second},
                                          false});
-                destination.result = std::move(outcome.result);
+                destination.result = outcome.result;
+                indicator_refreshes[binding.id] = {outcome.recalculation, outcome.calculated_input_begin,
+                                                   outcome.calculated_input_count, outcome.reused_prefix_samples,
+                                                   dirty == node_dirty.end()
+                                                       ? std::optional<Market::Core::Time::Range>{}
+                                                       : std::optional{dirty->second}};
                 std::erase_if(shared_calculations, [&](const auto& item) {
                     return item.source == found->second.get() && item.definition == binding.definition_id &&
                            item.parameters == binding.parameters;
                 });
                 shared_calculations.push_back({found->second.get(), binding.definition_id, binding.parameters,
-                                               found->second->revision, destination.result});
+                                               found->second->revision, found->second->content_generation,
+                                               std::move(outcome)});
             }
             for (const auto& output : destination.result.outputs) {
                 auto& values = destination.values[output.output_id];
@@ -360,6 +457,8 @@ struct DataGraph::Implementation {
             if (target == by_binding.end() || source == by_binding.end() || !target_binding || !source_binding)
                 continue;
 
+            // The propagated resampling range is bucket-aligned. Rebuild from the first
+            // actual source sample in that bucket so OHLCV aggregation retains its prefix.
             const auto source_begin =
                 std::ranges::lower_bound(source->second->bars, affected->second.begin, {}, &Intern::Bar::open_time);
             const auto begin_index = static_cast<std::size_t>(source_begin - source->second->bars.begin());
@@ -378,6 +477,7 @@ struct DataGraph::Implementation {
             merged.insert(merged.end(), result.bars.begin(), result.bars.end());
             target->second->bars = std::move(merged);
             ++target->second->revision;
+            ++target->second->content_generation;
             target->second->error.clear();
             auto& metadata = derived_refreshes[target_id];
             ++metadata.refresh_count;
@@ -622,6 +722,11 @@ DerivedRefresh DataGraph::derived_refresh(std::string_view id) const {
     return found == m_implementation->derived_refreshes.end() ? DerivedRefresh{} : found->second;
 }
 
+IndicatorRefresh DataGraph::indicator_refresh(std::string_view id) const {
+    const auto found = m_implementation->indicator_refreshes.find(std::string{id});
+    return found == m_implementation->indicator_refreshes.end() ? IndicatorRefresh{} : found->second;
+}
+
 BindingState DataGraph::state(std::string_view id) const {
     const auto found = m_implementation->by_binding.find(std::string{id});
     if (found == m_implementation->by_binding.end())
@@ -690,7 +795,10 @@ void DataGraph::set_series(std::string_view id, std::span<const Market::Core::Se
         changed = bars[common].open_time;
     if (!changed && bars.size() < found->second->bars.size())
         changed = found->second->bars[bars.size()].open_time;
+    if (!changed && revision != found->second->revision && !bars.empty())
+        changed = bars.front().open_time;
     if (changed) {
+        ++found->second->content_generation;
         m_implementation->dirty_from =
             m_implementation->dirty_from ? std::min(*m_implementation->dirty_from, *changed) : changed;
         const auto end = changed_end.value_or(bars.empty() ? *changed + std::chrono::seconds{1}
@@ -745,6 +853,7 @@ void DataGraph::apply(const Market::Core::Series::BarUpdate& update) {
 
     shared->second->bars.assign(model.bars().begin(), model.bars().end());
     ++shared->second->revision;
+    ++shared->second->content_generation;
     if (model.dirty_range())
         m_implementation->dirty_from = m_implementation->dirty_from
                                            ? std::min(*m_implementation->dirty_from, model.dirty_range()->begin)
@@ -848,6 +957,13 @@ Evaluation DataGraph::evaluate(const std::shared_ptr<ConditionExpression>& expre
 
 std::span<const Market::Core::Series::Bar> DataGraph::primary_bars() const {
     const auto found = m_implementation->by_binding.find(m_implementation->snapshot.definition().primary_series_id);
+    return found == m_implementation->by_binding.end()
+               ? std::span<const Market::Core::Series::Bar>{}
+               : std::span<const Market::Core::Series::Bar>{found->second->bars};
+}
+
+std::span<const Market::Core::Series::Bar> DataGraph::series_bars(std::string_view id) const {
+    const auto found = m_implementation->by_binding.find(std::string{id});
     return found == m_implementation->by_binding.end()
                ? std::span<const Market::Core::Series::Bar>{}
                : std::span<const Market::Core::Series::Bar>{found->second->bars};

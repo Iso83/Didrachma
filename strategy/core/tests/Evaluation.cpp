@@ -15,6 +15,7 @@ class Analyzer final : public Analysis::Core::Indicator::Analyzer {
 public:
     std::size_t calculations{};
     std::vector<std::optional<Market::Core::Time::Range>> dirty_ranges;
+    std::map<std::string, Analysis::Core::Indicator::Result> cached;
 
     std::vector<Analysis::Core::Indicator::Definition> catalog() const override {
         using namespace Analysis::Core::Indicator;
@@ -41,18 +42,37 @@ public:
     calculate(const Analysis::Core::Indicator::CalculationRequest& request) override {
         ++calculations;
         dirty_ranges.push_back(request.dirty_range);
+        const auto previous = cached.find(request.instance.id);
+        std::size_t begin{};
+        auto kind = Analysis::Core::Indicator::RecalculationKind::Full;
+        if (request.dirty_range && previous != cached.end()) {
+            const auto changed =
+                std::ranges::lower_bound(request.bars, request.dirty_range->begin, {}, &Bar::open_time);
+            begin = static_cast<std::size_t>(changed - request.bars.begin());
+            const auto lookback = required_history(request.instance) - 1;
+            begin = begin > lookback ? begin - lookback : 0;
+            kind = begin == 0 ? Analysis::Core::Indicator::RecalculationKind::Full
+                              : Analysis::Core::Indicator::RecalculationKind::Tail;
+        }
         Analysis::Core::Indicator::Result result;
         result.input_revision = request.input_revision;
         result.revision = request.input_revision;
         result.state = request.bars.empty() ? Analysis::Core::Indicator::CalculationState::InsufficientHistory
                                             : Analysis::Core::Indicator::CalculationState::Ready;
         Analysis::Core::Indicator::OutputSeries output{"value"};
-        for (const auto& bar : request.bars)
+        if (kind == Analysis::Core::Indicator::RecalculationKind::Tail && !previous->second.outputs.empty())
+            std::ranges::copy_if(
+                previous->second.outputs.front().samples, std::back_inserter(output.samples), [&](const auto& sample) {
+                    return begin >= request.bars.size() || sample.timestamp < request.bars[begin].open_time;
+                });
+        for (const auto& bar : request.bars.subspan(begin))
             output.samples.push_back({bar.open_time, request.instance.definition_id == "pattern"
                                                          ? (bar.close > bar.open ? 100.0 : 0.0)
                                                          : bar.close});
         result.outputs.push_back(std::move(output));
-        return {std::move(result), Analysis::Core::Indicator::RecalculationKind::Full};
+        cached[request.instance.id] = result;
+        return {std::move(result), kind, begin, request.bars.size() - begin,
+                kind == Analysis::Core::Indicator::RecalculationKind::Tail ? begin : 0};
     }
 };
 
@@ -85,24 +105,101 @@ std::shared_ptr<ConditionExpression> indicator(std::string, std::string, double)
 Definition definition();
 Bar bar(std::int64_t, std::int64_t, double,
         Market::Core::Series::BarState state = Market::Core::Series::BarState::Closed);
+bool evaluations_equal(const std::vector<Evaluation>&, const std::vector<Evaluation>&);
 
-int test_warmup_includes_analyzer_and_all_sequence_limits() {
+std::shared_ptr<ConditionExpression> sequence(std::string id, std::optional<Duration> elapsed,
+                                              std::optional<std::uint64_t> bars) {
+    auto value = std::make_shared<ConditionExpression>();
+    value->id = std::move(id);
+    value->kind = ConditionKind::Sequence;
+    value->sequence = {elapsed, bars};
+    value->children = {market(value->id + "-leaf", "primary", 0)};
+    return value;
+}
+
+int test_entry_warmup_uses_maximum_closed_bars() {
     Analyzer analyzer;
     auto model = definition();
-    auto sequence = [](std::string id, std::optional<Duration> elapsed, std::optional<std::uint64_t> bars) {
-        auto value = std::make_shared<ConditionExpression>();
-        value->id = std::move(id);
-        value->kind = ConditionKind::Sequence;
-        value->sequence = {elapsed, bars};
-        value->children = {market(value->id + "-leaf", "primary", 0)};
-        return value;
-    };
+    model.indicators.clear();
     model.entry.condition = sequence("entry-sequence", {}, 4);
-    model.exits = {{"exit", sequence("exit-sequence", 50min, {})}};
-    model.runtime_rules = {{"rule", 1, sequence("rule-sequence", {}, 6), {}}};
     DataGraph graph(Snapshot{model}, analyzer, "AAPL");
-    // Three analyzer bars plus the largest six-bar sequence window, sharing the current bar.
+    CPPTEST_ASSERT(graph.required_history("primary") == 4);
+    return 0;
+}
+
+int test_exit_warmup_uses_maximum_elapsed_on_primary_clock() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.indicators.clear();
+    model.entry.condition = market("entry", "primary", 0);
+    model.exits = {{"exit", sequence("exit-sequence", 50min, {})}};
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    CPPTEST_ASSERT(graph.required_history("primary") == 5);
+    return 0;
+}
+
+int test_runtime_rule_warmup_uses_its_winning_limit() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.indicators.clear();
+    model.entry.condition = sequence("entry-sequence", {}, 3);
+    model.runtime_rules = {{"rule", 1, sequence("runtime-sequence", {}, 7), {}}};
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    CPPTEST_ASSERT(graph.required_history("primary") == 7);
+    return 0;
+}
+
+int test_analyzer_lookback_combines_with_sequence_requirement() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.entry.condition = sequence("entry-sequence", {}, 6);
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
     CPPTEST_ASSERT(graph.required_history("primary") == 8);
+    return 0;
+}
+
+int test_derived_target_lookback_is_converted_to_source_samples() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.indicators = {{"hour-value", "hourly", "identity", {{"period", std::int64_t{3}}}}};
+    model.entry.condition = indicator("hour-condition", "hour-value", 0);
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.derive_series("hourly", "primary");
+    CPPTEST_ASSERT(graph.required_history("primary") == 18);
+    CPPTEST_ASSERT(graph.required_history("hourly") == 3);
+    return 0;
+}
+
+int test_sequence_dependency_combines_its_time_window_with_analyzer_lookback() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series[0].timeframe = {1, Market::Core::Time::Unit::Hour};
+    model.indicators = {{"native-value", "primary-copy", "identity", {{"period", std::int64_t{3}}}}};
+    model.entry.condition = sequence("dependency-sequence", {}, 6);
+    model.entry.condition->children = {indicator("native-leaf", "native-value", 0)};
+
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+
+    CPPTEST_ASSERT(graph.required_history("primary") == 6);
+    CPPTEST_ASSERT(graph.required_history("primary-copy") == 38);
+    return 0;
+}
+
+int test_sequence_requirement_conversion_is_transitive_across_derived_chain() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series.push_back(
+        {"six-hour", "fake", {InstrumentKind::Subject, {}}, {6, Market::Core::Time::Unit::Hour}, {}});
+    model.indicators = {{"six-hour-value", "six-hour", "identity", {{"period", std::int64_t{3}}}}};
+    model.entry.condition = sequence("chain-sequence", 18h, {});
+    model.entry.condition->children = {indicator("chain-leaf", "six-hour-value", 0)};
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.derive_series("hourly", "primary");
+    graph.derive_series("six-hour", "hourly");
+
+    CPPTEST_ASSERT(graph.required_history("six-hour") == 5);
+    CPPTEST_ASSERT(graph.required_history("hourly") == 30);
+    CPPTEST_ASSERT(graph.required_history("primary") == 180);
     return 0;
 }
 
@@ -120,6 +217,55 @@ int test_identical_calculation_identity_is_executed_once() {
     (void)graph.evaluate(model.entry.condition, at(1200));
     (void)graph.evaluate(model.entry.condition, at(1200), RunValues{});
     CPPTEST_ASSERT(analyzer.calculations == 1);
+    return 0;
+}
+
+int test_same_revision_content_change_invalidates_shared_calculation() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.indicators = {{"first", "primary", "identity", {}}, {"second", "primary-copy", "identity", {}}};
+    model.entry.condition = indicator("uses-first", "first", 10);
+    DataGraph incremental(Snapshot{model}, analyzer, "AAPL");
+    auto bars = std::vector{bar(0, 600, 10), bar(600, 600, 11), bar(1200, 600, 12)};
+    incremental.set_series("primary", bars, 7);
+    (void)incremental.evaluate_entry();
+    CPPTEST_ASSERT(analyzer.calculations == 1);
+
+    bars[1].close = 3;
+    incremental.set_series("primary", bars, 7);
+    const auto actual = incremental.evaluate_entry();
+    CPPTEST_ASSERT(analyzer.calculations == 2);
+
+    Analyzer replay_analyzer;
+    DataGraph replay(Snapshot{model}, replay_analyzer, "AAPL");
+    replay.set_series("primary", bars, 7);
+    CPPTEST_ASSERT(evaluations_equal(actual, replay.evaluate_entry()));
+    CPPTEST_ASSERT(incremental.indicator_value("first", "value", at(1200)) ==
+                   replay.indicator_value("first", "value", at(1200)));
+    CPPTEST_ASSERT(incremental.indicator_value("second", "value", at(1200)) ==
+                   replay.indicator_value("second", "value", at(1200)));
+    return 0;
+}
+
+int test_calculation_identity_changes_are_separate_and_duplicate_ids_remain_addressable() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.indicators = {{"base", "primary", "identity", {}},
+                        {"duplicate", "primary-copy", "identity", {}},
+                        {"different-source", "peer", "identity", {}},
+                        {"different-definition", "primary", "pattern", {}},
+                        {"different-parameters", "primary", "identity", {{"period", std::int64_t{2}}}}};
+    model.entry.condition = indicator("uses-base", "base", 0);
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.set_series("primary", std::vector{bar(0, 600, 10), bar(600, 600, 11)}, 1);
+    graph.set_series("peer", std::vector{bar(0, 86400, 20), bar(86400, 86400, 21)}, 1);
+    (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(analyzer.calculations == 4);
+    CPPTEST_ASSERT(graph.indicator_value("base", "value", at(1200)) ==
+                   graph.indicator_value("duplicate", "value", at(1200)));
+    graph.set_series("primary", std::vector{bar(0, 600, 10), bar(600, 600, 11)}, 2);
+    (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(analyzer.calculations == 7);
     return 0;
 }
 
@@ -272,40 +418,61 @@ int test_arrival_order_dirty_replay_and_error_readiness_are_deterministic() {
     return 0;
 }
 
-int test_same_count_replacements_use_open_time_and_match_full_replay() {
+int replacement_matches_full_replay(void (*mutate)(Bar&)) {
     const std::vector original{bar(0, 600, 10), bar(600, 600, 11), bar(1200, 600, 12)};
-    using Mutation = void (*)(Bar&);
-    const std::vector<Mutation> mutations{+[](Bar& value) { value.high += 7; },
-                                          +[](Bar& value) { value.low -= 7; },
-                                          +[](Bar& value) { value.open += 7; },
-                                          +[](Bar& value) { value.volume += 7; },
-                                          +[](Bar& value) { value.close += 7; },
-                                          +[](Bar& value) { value.close_time = at(1900); },
-                                          +[](Bar& value) { value.state = Market::Core::Series::BarState::Forming; }};
-    for (const auto mutate : mutations) {
-        Analyzer incremental_analyzer;
-        auto model = definition();
-        model.indicators = {{"value", "primary", "identity", {}}};
-        model.entry.condition = indicator("value-condition", "value", 0);
-        DataGraph incremental(Snapshot{model}, incremental_analyzer, "AAPL");
-        incremental.set_series("primary", original, 1);
-        (void)incremental.evaluate_entry();
-        auto corrected = original;
-        mutate(corrected[1]);
-        incremental.set_series("primary", corrected, 2);
-        const auto actual = incremental.evaluate_entry();
-        CPPTEST_ASSERT(incremental_analyzer.dirty_ranges.back());
-        CPPTEST_ASSERT(incremental_analyzer.dirty_ranges.back()->begin == corrected[1].open_time);
-
-        Analyzer replay_analyzer;
-        DataGraph replay(Snapshot{model}, replay_analyzer, "AAPL");
-        replay.set_series("primary", corrected, 2);
-        CPPTEST_ASSERT(evaluations_equal(actual, replay.evaluate_entry()));
-        for (const auto& item : actual)
-            CPPTEST_ASSERT(incremental.indicator_value("value", "value", item.time) ==
-                           replay.indicator_value("value", "value", item.time));
-    }
+    Analyzer incremental_analyzer;
+    auto model = definition();
+    model.indicators = {{"value", "primary", "identity", {}}};
+    model.entry.condition = indicator("value-condition", "value", 0);
+    DataGraph incremental(Snapshot{model}, incremental_analyzer, "AAPL");
+    incremental.set_series("primary", original, 1);
+    (void)incremental.evaluate_entry();
+    auto corrected = original;
+    mutate(corrected[1]);
+    incremental.set_series("primary", corrected, 2);
+    const auto actual = incremental.evaluate_entry();
+    CPPTEST_ASSERT(incremental_analyzer.dirty_ranges.back());
+    CPPTEST_ASSERT(incremental_analyzer.dirty_ranges.back()->begin == corrected[1].open_time);
+    const auto refresh = incremental.indicator_refresh("value");
+    CPPTEST_ASSERT(refresh.kind == Analysis::Core::Indicator::RecalculationKind::Tail);
+    CPPTEST_ASSERT(refresh.calculated_input_begin == 1 && refresh.calculated_input_count == 2 &&
+                   refresh.reused_prefix == 1);
+    Analyzer replay_analyzer;
+    DataGraph replay(Snapshot{model}, replay_analyzer, "AAPL");
+    replay.set_series("primary", corrected, 2);
+    CPPTEST_ASSERT(evaluations_equal(actual, replay.evaluate_entry()));
+    for (const auto& item : actual)
+        CPPTEST_ASSERT(incremental.indicator_value("value", "value", item.time) ==
+                       replay.indicator_value("value", "value", item.time));
     return 0;
+}
+
+int test_high_only_correction_matches_full_replay() {
+    return replacement_matches_full_replay(+[](Bar& v) { v.high += 7; });
+}
+
+int test_low_only_correction_matches_full_replay() {
+    return replacement_matches_full_replay(+[](Bar& v) { v.low -= 7; });
+}
+
+int test_open_price_only_correction_matches_full_replay() {
+    return replacement_matches_full_replay(+[](Bar& v) { v.open += 7; });
+}
+
+int test_close_only_correction_matches_full_replay() {
+    return replacement_matches_full_replay(+[](Bar& v) { v.close += 7; });
+}
+
+int test_volume_only_correction_matches_full_replay() {
+    return replacement_matches_full_replay(+[](Bar& v) { v.volume += 7; });
+}
+
+int test_close_time_correction_matches_full_replay() {
+    return replacement_matches_full_replay(+[](Bar& v) { v.close_time = at(1900); });
+}
+
+int test_state_only_correction_matches_full_replay() {
+    return replacement_matches_full_replay(+[](Bar& v) { v.state = Market::Core::Series::BarState::Forming; });
 }
 
 int test_open_time_moves_dirty_both_old_and_new_bucket_coordinates() {
@@ -404,7 +571,18 @@ int test_derived_series_refreshes_and_propagates_bucket_dirty_range() {
     CPPTEST_ASSERT(analyzer.dirty_ranges.back()->begin == at(3600));
     graph.apply({key, Market::Core::Series::BarUpdateKind::Backfill, {bar(1200, 600, 30)}});
     (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").refresh_count == 3);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_begin == 0);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_count == 7);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").reused_prefix == 0);
     CPPTEST_ASSERT(analyzer.dirty_ranges.back()->begin == at(0));
+    CPPTEST_ASSERT(graph.series_bars("hourly").front().open == 9);
+    CPPTEST_ASSERT(graph.series_bars("hourly").front().high == 31);
+    CPPTEST_ASSERT(graph.series_bars("hourly").front().low == 8);
+    CPPTEST_ASSERT(graph.series_bars("hourly").front().close == 15);
+    CPPTEST_ASSERT(graph.series_bars("hourly").front().volume == 6000);
+    CPPTEST_ASSERT(graph.series_bars("hourly").front().state == Market::Core::Series::BarState::Closed);
+    CPPTEST_ASSERT(graph.series_bars("hourly").front().close_time == at(3600));
     CPPTEST_ASSERT(graph.indicator_value("hour-value", "value", at(3600)) == 15);
 
     auto forming = bar(3600, 600, 25, Market::Core::Series::BarState::Forming);
@@ -413,10 +591,58 @@ int test_derived_series_refreshes_and_propagates_bucket_dirty_range() {
     forming.close = 26;
     graph.apply({key, Market::Core::Series::BarUpdateKind::ReplaceForming, {forming}});
     (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").refresh_count == 5);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_begin == 6);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_count == 1);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").reused_prefix == 1);
     CPPTEST_ASSERT(analyzer.dirty_ranges.back()->begin == at(3600));
     graph.apply({key, Market::Core::Series::BarUpdateKind::Reset, source});
     (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").refresh_count == 6);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_begin == 0);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_count == 6);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").reused_prefix == 0);
     CPPTEST_ASSERT(analyzer.dirty_ranges.back()->begin == at(0));
+    CPPTEST_ASSERT(graph.series_bars("hourly").size() == 1);
+    return 0;
+}
+
+int test_derived_chain_refreshes_in_order_and_unrelated_relation_is_untouched() {
+    Analyzer analyzer;
+    auto model = definition();
+    model.series.push_back(
+        {"six-hour", "fake", {InstrumentKind::Subject, {}}, {6, Market::Core::Time::Unit::Hour}, {}});
+    model.series.push_back(
+        {"peer-source", "fake", {InstrumentKind::Fixed, "XLK"}, {10, Market::Core::Time::Unit::Minute}, {}});
+    model.series.push_back(
+        {"peer-hour", "fake", {InstrumentKind::Fixed, "XLK"}, {1, Market::Core::Time::Unit::Hour}, {}});
+    model.indicators = {{"chain-value", "six-hour", "identity", {}}};
+    model.entry.condition = indicator("chain-condition", "chain-value", 0);
+    DataGraph graph(Snapshot{model}, analyzer, "AAPL");
+    graph.derive_series("hourly", "primary");
+    graph.derive_series("six-hour", "hourly");
+    graph.derive_series("peer-hour", "peer-source");
+    std::vector<Bar> source;
+    for (std::int64_t open = 0; open < 21600; open += 600)
+        source.push_back(bar(open, 600, 10 + static_cast<double>(open / 600)));
+    graph.set_series("primary", source, 1);
+    (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").refresh_count == 1);
+    CPPTEST_ASSERT(graph.derived_refresh("six-hour").refresh_count == 1);
+    CPPTEST_ASSERT(graph.derived_refresh("peer-hour").refresh_count == 0);
+
+    const auto key = graph.resolution().series.front().key;
+    graph.apply({key, Market::Core::Series::BarUpdateKind::AppendClosed, {bar(21600, 600, 50)}});
+    (void)graph.evaluate_entry();
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").refresh_count == 2);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_begin == 36);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").source_count == 1);
+    CPPTEST_ASSERT(graph.derived_refresh("hourly").reused_prefix == 6);
+    CPPTEST_ASSERT(graph.derived_refresh("six-hour").refresh_count == 2);
+    CPPTEST_ASSERT(graph.derived_refresh("six-hour").source_begin == 6);
+    CPPTEST_ASSERT(graph.derived_refresh("six-hour").source_count == 1);
+    CPPTEST_ASSERT(graph.derived_refresh("six-hour").reused_prefix == 1);
+    CPPTEST_ASSERT(graph.derived_refresh("peer-hour").refresh_count == 0);
     return 0;
 }
 
@@ -598,18 +824,33 @@ int main() {
     CPPTEST_RUN(test_resolution_warmup_graph_reuse_and_derived_timeframe);
     CPPTEST_RUN(test_publication_alignment_unknown_stale_and_closed_clock);
     CPPTEST_RUN(test_arrival_order_dirty_replay_and_error_readiness_are_deterministic);
-    CPPTEST_RUN(test_same_count_replacements_use_open_time_and_match_full_replay);
+    CPPTEST_RUN(test_high_only_correction_matches_full_replay);
+    CPPTEST_RUN(test_low_only_correction_matches_full_replay);
+    CPPTEST_RUN(test_open_price_only_correction_matches_full_replay);
+    CPPTEST_RUN(test_close_only_correction_matches_full_replay);
+    CPPTEST_RUN(test_volume_only_correction_matches_full_replay);
+    CPPTEST_RUN(test_close_time_correction_matches_full_replay);
+    CPPTEST_RUN(test_state_only_correction_matches_full_replay);
     CPPTEST_RUN(test_open_time_moves_dirty_both_old_and_new_bucket_coordinates);
     CPPTEST_RUN(test_apply_update_dirty_ranges_are_not_seeded_by_history_reset);
     CPPTEST_RUN(test_derived_series_refreshes_and_propagates_bucket_dirty_range);
+    CPPTEST_RUN(test_derived_chain_refreshes_in_order_and_unrelated_relation_is_untouched);
     CPPTEST_RUN(test_provider_history_and_updates_use_provider_neutral_contracts);
     CPPTEST_RUN(test_forming_indicator_is_unknown_until_the_source_bar_closes);
     CPPTEST_RUN(test_forming_pattern_cannot_advance_sequence_and_closed_occurrence_is_consumed_once);
     CPPTEST_RUN(test_cross_previous_inputs_require_fresh_available_samples);
     CPPTEST_RUN(test_cross_missing_previous_inputs_have_actionable_evidence);
     CPPTEST_RUN(test_fresh_cross_truth_and_source_time_are_exact);
-    CPPTEST_RUN(test_warmup_includes_analyzer_and_all_sequence_limits);
+    CPPTEST_RUN(test_entry_warmup_uses_maximum_closed_bars);
+    CPPTEST_RUN(test_exit_warmup_uses_maximum_elapsed_on_primary_clock);
+    CPPTEST_RUN(test_runtime_rule_warmup_uses_its_winning_limit);
+    CPPTEST_RUN(test_analyzer_lookback_combines_with_sequence_requirement);
+    CPPTEST_RUN(test_derived_target_lookback_is_converted_to_source_samples);
+    CPPTEST_RUN(test_sequence_dependency_combines_its_time_window_with_analyzer_lookback);
+    CPPTEST_RUN(test_sequence_requirement_conversion_is_transitive_across_derived_chain);
     CPPTEST_RUN(test_identical_calculation_identity_is_executed_once);
+    CPPTEST_RUN(test_same_revision_content_change_invalidates_shared_calculation);
+    CPPTEST_RUN(test_calculation_identity_changes_are_separate_and_duplicate_ids_remain_addressable);
     CPPTEST_RUN(test_secondary_freshness_applies_to_market_indicator_cross_and_pattern_leaves);
     return 0;
 }

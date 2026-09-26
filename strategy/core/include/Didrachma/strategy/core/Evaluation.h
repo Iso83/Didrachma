@@ -65,6 +65,14 @@ struct DerivedRefresh {
     std::optional<Market::Core::Time::Range> dirty_range;
 };
 
+struct IndicatorRefresh {
+    Analysis::Core::Indicator::RecalculationKind kind{Analysis::Core::Indicator::RecalculationKind::None};
+    std::size_t calculated_input_begin{};
+    std::size_t calculated_input_count{};
+    std::size_t reused_prefix{};
+    std::optional<Market::Core::Time::Range> dirty_range;
+};
+
 [[nodiscard]] Resolution resolve(const Definition&, std::optional<std::string_view> subject);
 
 class DataGraph {
@@ -80,6 +88,7 @@ public:
     [[nodiscard]] std::size_t unique_series_count() const;
     [[nodiscard]] std::vector<std::string> dependency_order() const;
     [[nodiscard]] DerivedRefresh derived_refresh(std::string_view binding_id) const;
+    [[nodiscard]] IndicatorRefresh indicator_refresh(std::string_view binding_id) const;
 
     void set_series(std::string_view binding_id, std::span<const Market::Core::Series::Bar> bars,
                     std::uint64_t revision = 1);
@@ -91,6 +100,7 @@ public:
     [[nodiscard]] Evaluation evaluate(const std::shared_ptr<ConditionExpression>&, Market::Core::Time::UtcTimestamp,
                                       std::optional<RunValues> run = {});
     [[nodiscard]] std::span<const Market::Core::Series::Bar> primary_bars() const;
+    [[nodiscard]] std::span<const Market::Core::Series::Bar> series_bars(std::string_view binding_id) const;
     [[nodiscard]] std::optional<double> indicator_value(std::string_view indicator_id, std::string_view output_id,
                                                         Market::Core::Time::UtcTimestamp) const;
 };
