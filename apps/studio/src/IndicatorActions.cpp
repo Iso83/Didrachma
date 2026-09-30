@@ -1,5 +1,7 @@
 #include "IndicatorActions.h"
 
+#include <Didrachma/stockChart/core/PatternProjection.h>
+
 namespace Didrachma::Apps::Studio {
 StockChart::Core::Profile capture_profile(const StockChart::Core::Document& document, std::string name) {
     return StockChart::Core::capture_profile(document, std::move(name));
@@ -13,6 +15,11 @@ std::string add_indicator(StockChart::Core::Document& document,
 
     const auto instance = document.add_indicator(definition.id, std::move(parameters));
     document.set_indicator_name(instance, definition.display_name);
+    if (definition.capability == Analysis::Core::Indicator::Capability::AnalysisEvent) {
+        StockChart::Core::reconcile_pattern_projection(document, definition, instance);
+        return instance;
+    }
+
     const auto pane =
         definition.pane == Analysis::Core::Indicator::PaneHint::Volume     ? StockChart::Core::LayerPane::Volume
         : definition.pane == Analysis::Core::Indicator::PaneHint::Separate ? StockChart::Core::LayerPane::Separate

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Didrachma/analysis/core/condition/Event.h>
 #include <Didrachma/analysis/core/indicator/Result.h>
 #include <Didrachma/market/core/series/Bar.h>
 #include <Didrachma/market/core/time/Frame.h>
@@ -84,6 +85,9 @@ public:
     }
     [[nodiscard]] Size size() const {
         return m_size;
+    }
+    [[nodiscard]] float y_offset() const {
+        return m_y_offset;
     }
 };
 
@@ -184,6 +188,23 @@ struct StyledBandGeometry {
     float fill_opacity{0.2F};
 };
 
+struct MarkerGlyph {
+    Point center;
+    Analysis::Core::Condition::Direction direction{Analysis::Core::Condition::Direction::Neutral};
+    float size{6.0F};
+    bool selected{};
+};
+
+struct StyledMarkerGeometry {
+    std::vector<MarkerGlyph> glyphs;
+    Core::Color color;
+};
+
+struct LineSegment {
+    Point first;
+    Point second;
+};
+
 std::span<const Market::Core::Series::Bar> visible_bars(std::span<const Market::Core::Series::Bar> bars,
                                                         Market::Core::Time::Range range);
 PriceRange fit_price_range(std::span<const Market::Core::Series::Bar> bars, double padding_fraction = 0.1);
@@ -200,6 +221,14 @@ LineGeometry build_line(std::span<const Analysis::Core::Indicator::OutputSample>
                         const CoordinateMapper& mapper);
 BandGeometry build_band(std::span<const Analysis::Core::Indicator::OutputSample> upper,
                         std::span<const Analysis::Core::Indicator::OutputSample> lower, const CoordinateMapper& mapper);
+StyledMarkerGeometry build_markers(std::span<const Analysis::Core::Condition::Event> events,
+                                   std::span<const Market::Core::Series::Bar> bars, const CoordinateMapper& mapper,
+                                   Core::Color color, std::string_view chart_id, std::string_view source_instance_id,
+                                   std::optional<std::string_view> selected_event_id = std::nullopt);
+std::vector<LineSegment> build_event_selection_line(Market::Core::Time::UtcTimestamp timestamp,
+                                                    std::span<const Market::Core::Series::Bar> bars,
+                                                    const CoordinateMapper& price_mapper, float canvas_height,
+                                                    float candle_padding = 4.0F);
 
 struct HitResult {
     std::size_t index{};

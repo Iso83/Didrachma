@@ -15,11 +15,16 @@ struct CalculationRequest {
     std::span<const Market::Core::Series::Bar> bars;
     std::uint64_t input_revision{};
     std::optional<Market::Core::Time::Range> dirty_range;
+    // True only when the caller expanded by actual preceding input samples, not elapsed time.
+    bool dirty_range_includes_lookback{};
 };
 
 struct CalculationOutcome {
     Result result;
     RecalculationKind recalculation{RecalculationKind::None};
+    std::size_t calculated_input_begin{};
+    std::size_t calculated_input_count{};
+    std::size_t reused_prefix_samples{};
 };
 
 } // namespace Didrachma::Analysis::Core::Indicator

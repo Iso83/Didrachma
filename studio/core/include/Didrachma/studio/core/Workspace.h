@@ -43,10 +43,12 @@ public:
     bool close_chart(const std::string& chart_id);
     bool select_chart(const std::string& chart_id);
     bool set_polling(const std::string& chart_id, bool enabled);
+    bool request_history(const std::string& chart_id, Market::Core::Time::Range range);
     [[nodiscard]] bool polling(const std::string& chart_id) const {
         return m_polling_charts.contains(chart_id);
     }
     [[nodiscard]] StockChart::Core::Document* selected_chart();
+    [[nodiscard]] StockChart::Core::Document* find_chart(const Market::Core::Series::Key&);
     [[nodiscard]] const Market::Core::Provider::HistoryRequest* history_request(const std::string& chart_id) const;
 
     friend std::string serialize_workspace(const Workspace& workspace);

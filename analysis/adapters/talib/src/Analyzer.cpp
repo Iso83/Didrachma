@@ -5,6 +5,7 @@
 #include <Didrachma/analysis/core/indicator/Validation.h>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <ta_abstract.h>
 #include <ta_libc.h>
@@ -13,6 +14,26 @@ using namespace Didrachma::Analysis::Core::Indicator;
 
 namespace Didrachma::Analysis::Adapters::TaLib {
 namespace Intern {
+std::uint64_t input_fingerprint(std::span<const Market::Core::Series::Bar> bars) {
+    std::uint64_t value = 1469598103934665603ULL;
+    const auto append = [&](std::uint64_t item) {
+        value ^= item;
+        value *= 1099511628211ULL;
+    };
+    for (const auto& bar : bars) {
+        append(static_cast<std::uint64_t>(bar.open_time.time_since_epoch().count()));
+        append(bar.close_time ? static_cast<std::uint64_t>(bar.close_time->time_since_epoch().count()) : 0);
+        for (const auto number : {bar.open, bar.high, bar.low, bar.close, bar.volume}) {
+            std::uint64_t bits{};
+            static_assert(sizeof(bits) == sizeof(number));
+            std::memcpy(&bits, &number, sizeof(bits));
+            append(bits);
+        }
+        append(static_cast<std::uint64_t>(bar.state));
+    }
+    return value;
+}
+
 void merge(OutputSeries& destination, OutputSeries calculated) {
     if (calculated.samples.empty())
         return;
@@ -73,6 +94,7 @@ public:
         std::size_t input_size{};
         std::string definition_id;
         std::map<std::string, ParameterValue> parameters;
+        std::uint64_t input_fingerprint{};
     };
     std::map<std::string, Cache> instances;
 };
@@ -89,21 +111,39 @@ std::vector<Definition> Analyzer::catalog() const {
     return Intern::catalog();
 }
 
+std::size_t Analyzer::required_history(const Instance& instance) const {
+    const auto definitions = Intern::catalog();
+    const auto definition = std::ranges::find(definitions, instance.definition_id, &Definition::id);
+    if (definition == definitions.end() || validate_parameters(*definition, instance.parameters))
+        return 1;
+
+    const auto* adapter = Intern::descriptor(instance.definition_id);
+    if (!adapter)
+        return 1;
+
+    const auto value = Intern::lookback(*adapter, instance);
+    return value < 0 ? 1 : static_cast<std::size_t>(value + 1);
+}
+
 CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
     Intern::Runtime::instance();
     auto& cache = m_impl->instances[request.instance.id];
+    const auto input_fingerprint = Intern::input_fingerprint(request.bars);
     const bool same_configuration =
         request.instance.definition_id == cache.definition_id && request.instance.parameters == cache.parameters;
-    if (same_configuration && request.input_revision == cache.result.input_revision)
+    if (same_configuration && request.input_revision == cache.result.input_revision &&
+        input_fingerprint == cache.input_fingerprint)
         return {cache.result, RecalculationKind::None};
 
-    auto publish = [&](Result result, RecalculationKind mode) {
+    auto publish = [&](Result result, RecalculationKind mode, std::size_t input_begin = 0, std::size_t input_count = 0,
+                       std::size_t reused_prefix = 0) {
         result.revision = cache.result.revision + 1;
         cache.result = result;
         cache.input_size = request.bars.size();
         cache.definition_id = request.instance.definition_id;
         cache.parameters = request.instance.parameters;
-        return CalculationOutcome{std::move(result), mode};
+        cache.input_fingerprint = input_fingerprint;
+        return CalculationOutcome{std::move(result), mode, input_begin, input_count, reused_prefix};
     };
 
     const auto definitions = Intern::catalog();
@@ -142,8 +182,14 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
         const auto dirty = std::ranges::lower_bound(request.bars, request.dirty_range->begin, {},
                                                     &Market::Core::Series::Bar::open_time);
         const auto dirty_index = static_cast<std::size_t>(std::distance(request.bars.begin(), dirty));
-        start = dirty_index > static_cast<std::size_t>(lookback) ? dirty_index - lookback : 0;
+        start = request.dirty_range_includes_lookback
+                    ? dirty_index
+                    : (dirty_index > static_cast<std::size_t>(lookback) ? dirty_index - lookback : 0);
         mode = RecalculationKind::Tail;
+        if (request.bars.size() - start <= static_cast<std::size_t>(lookback)) {
+            start = 0;
+            mode = RecalculationKind::Full;
+        }
     }
 
     std::vector<double> open, high, low, close, volume;
@@ -213,6 +259,13 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
                                          "TA-Lib calculation failed with code " + std::to_string(code)}},
                        mode);
 
+    std::size_t reused_prefix = 0;
+    if (mode == RecalculationKind::Tail && !calculated.empty() && !calculated.front().samples.empty() &&
+        !cache.result.outputs.empty())
+        reused_prefix = static_cast<std::size_t>(
+            std::ranges::count_if(cache.result.outputs.front().samples, [&](const auto& sample) {
+                return sample.timestamp < calculated.front().samples.front().timestamp;
+            }));
     Result result = mode == RecalculationKind::Tail ? cache.result : Result{};
     if (mode == RecalculationKind::Tail)
         for (auto& output : calculated) {
@@ -226,6 +279,6 @@ CalculationOutcome Analyzer::calculate(const CalculationRequest& request) {
     result.state = CalculationState::Ready;
     result.error.reset();
     result.required_history = static_cast<std::size_t>(lookback + 1);
-    return publish(std::move(result), mode);
+    return publish(std::move(result), mode, start, request.bars.size() - start, reused_prefix);
 }
 } // namespace Didrachma::Analysis::Adapters::TaLib

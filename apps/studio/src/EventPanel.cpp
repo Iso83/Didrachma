@@ -18,7 +18,8 @@ const char* direction(Analysis::Core::Condition::Direction value) {
 } // namespace Intern
 
 const Analysis::Core::Condition::Event* draw_event_panel(const ::Didrachma::Studio::Core::EventList& events,
-                                                         const StockChart::Core::Document* active_chart, bool* open) {
+                                                         const StockChart::Core::Document* active_chart,
+                                                         std::set<std::string>& highlighted_event_ids, bool* open) {
     const Analysis::Core::Condition::Event* selected{};
     ImGui::Begin("Analysis Events", open);
     if (!active_chart)
@@ -33,8 +34,18 @@ const Analysis::Core::Condition::Event* draw_event_panel(const ::Didrachma::Stud
             char timestamp[32]{};
             std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M UTC", &utc);
             ImGui::PushID(event->id.c_str());
-            if (ImGui::Selectable(event->title.c_str(), active_chart->selected_event_id() == event->id))
+            bool highlighted = highlighted_event_ids.contains(event->id);
+            if (ImGui::Checkbox("##highlight", &highlighted)) {
+                if (highlighted)
+                    highlighted_event_ids.insert(event->id);
+                else
+                    highlighted_event_ids.erase(event->id);
+            }
+            ImGui::SameLine();
+            if (ImGui::Selectable(event->title.c_str(), active_chart->selected_event_id() == event->id)) {
+                highlighted_event_ids.insert(event->id);
                 selected = event;
+            }
 
             ImGui::TextDisabled("%s | %s | Attention", timestamp, Intern::direction(event->direction));
             ImGui::TextWrapped("%s", event->summary.c_str());

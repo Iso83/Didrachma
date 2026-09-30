@@ -60,8 +60,10 @@ void append(const TA_FuncInfo* info, void* opaque) {
     definition.id = lower(info->name);
     definition.display_name = info->hint;
     definition.group = info->group;
-    definition.pane = (info->flags & TA_FUNC_FLG_OVERLAP) ? PaneHint::PriceOverlay : PaneHint::Separate;
-    if (group == "Pattern Recognition")
+    const bool pattern_definition = group == "Pattern Recognition";
+    definition.pane =
+        (info->flags & TA_FUNC_FLG_OVERLAP) || pattern_definition ? PaneHint::PriceOverlay : PaneHint::Separate;
+    if (pattern_definition)
         definition.capability = Capability::AnalysisEvent;
 
     unsigned int real_inputs = 0;
@@ -127,9 +129,9 @@ void append(const TA_FuncInfo* info, void* opaque) {
         if (TA_GetOutputParameterInfo(info->handle, i, &output) != TA_SUCCESS)
             return;
         const auto id = output_id(output->paramName, info->nbOutput);
-        const bool pattern = output->flags & (TA_OUT_PATTERN_BOOL | TA_OUT_PATTERN_BULL_BEAR | TA_OUT_PATTERN_STRENGTH);
-        const auto visual =
-            pattern ? VisualKind::Marker : (output->flags & TA_OUT_HISTO ? VisualKind::Histogram : VisualKind::Line);
+        const auto visual = pattern_definition
+                                ? VisualKind::Marker
+                                : (output->flags & TA_OUT_HISTO ? VisualKind::Histogram : VisualKind::Line);
         auto role = OutputRole::Value;
         if (output->flags & TA_OUT_UPPER_LIMIT)
             role = OutputRole::UpperBand;
@@ -137,7 +139,9 @@ void append(const TA_FuncInfo* info, void* opaque) {
             role = OutputRole::LowerBand;
         else if (definition.pane == PaneHint::PriceOverlay)
             role = OutputRole::PriceReference;
-        definition.outputs.push_back({id, output->paramName, visual, role});
+        const auto direction =
+            (output->flags & TA_OUT_PATTERN_BULL_BEAR) ? EventDirection::Signed : EventDirection::Neutral;
+        definition.outputs.push_back({id, output->paramName, visual, role, direction});
         descriptor.outputs.push_back({id, output->type == TA_Output_Integer});
     }
 

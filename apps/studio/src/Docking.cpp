@@ -16,7 +16,7 @@ ImGuiID configure_default_docking(ImGuiID dockspace) {
 
     auto chart = dockspace;
     const auto left = ImGui::DockBuilderSplitNode(chart, ImGuiDir_Left, 0.18F, nullptr, &chart);
-    const auto right = ImGui::DockBuilderSplitNode(chart, ImGuiDir_Right, 0.20F, nullptr, &chart);
+    const auto right = ImGui::DockBuilderSplitNode(chart, ImGuiDir_Right, 0.28F, nullptr, &chart);
     auto left_top = left;
     const auto left_bottom = ImGui::DockBuilderSplitNode(left_top, ImGuiDir_Down, 0.62F, nullptr, &left_top);
     auto right_top = right;
@@ -25,7 +25,12 @@ ImGuiID configure_default_docking(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("Indicator Catalog", left_top);
     ImGui::DockBuilderDockWindow("Indicator Instances", left_bottom);
     ImGui::DockBuilderDockWindow("Profiles", right_top);
+    ImGui::DockBuilderDockWindow("Strategies", right_top);
+    ImGui::DockBuilderDockWindow("Strategy editor", right_top);
+    ImGui::DockBuilderDockWindow("Backtest Run Setup", right_top);
     ImGui::DockBuilderDockWindow("Analysis Events", right_bottom);
+    ImGui::DockBuilderDockWindow("Strategy monitor", right_bottom);
+    ImGui::DockBuilderDockWindow("Historical backtests", right_bottom);
     ImGui::DockBuilderDockWindow("TEST - 1 Hour###chart-1", chart);
     ImGui::DockBuilderDockWindow("SECOND - 1 Hour###chart-2", chart);
     ImGui::DockBuilderFinish(dockspace);

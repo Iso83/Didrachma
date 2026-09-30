@@ -70,6 +70,9 @@ bool YahooHistoryLoader::apply_if_ready(Didrachma::Studio::Core::Workspace& work
         if (auto* loaded = std::get_if<std::vector<Market::Core::Series::Bar>>(&result);
             !chart_id.empty() && view != views.end() && document != workspace.documents().end() && loaded) {
             view->bars = std::move(*loaded);
+            if (!view->bars.empty())
+                view->history_range = {view->bars.front().open_time,
+                                       view->bars.back().close_time.value_or(view->bars.back().open_time)};
             update_geometry(*view, *document, analyzer, &events);
             if (pending->polling) {
                 auto queue = std::make_unique<Market::Core::Provider::Queue>(256);

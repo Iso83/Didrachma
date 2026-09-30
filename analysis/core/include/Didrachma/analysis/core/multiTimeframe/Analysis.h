@@ -31,13 +31,15 @@ struct TimedValue {
 [[nodiscard]] const TimedValue* align_closed(std::span<const TimedValue> values,
                                              Market::Core::Time::UtcTimestamp evaluation_time);
 
-enum class NodeKind { Series, Indicator, Condition };
+enum class NodeKind { Series, Resampling, Indicator, PatternEvent, Condition };
 
 struct Node {
     std::string id;
     NodeKind kind{NodeKind::Series};
     std::vector<std::string> dependencies;
     std::chrono::seconds lookback{};
+    // Resampling nodes align an upstream source range to these bucket boundaries.
+    std::chrono::seconds bucket{};
 };
 
 struct GraphDiagnostic {
@@ -51,6 +53,10 @@ class DependencyGraph {
 public:
     bool add(Node node) {
         return m_nodes.emplace(node.id, std::move(node)).second;
+    }
+
+    void set(Node node) {
+        m_nodes.insert_or_assign(node.id, std::move(node));
     }
 
     [[nodiscard]] std::vector<GraphDiagnostic> validate() const;

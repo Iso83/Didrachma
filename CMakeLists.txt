@@ -79,6 +79,8 @@ cppcmake_module_add(market/providers/yahoo)
 cppcmake_module_add(analysis/core)
 cppcmake_module_add(analysis/adapters/talib)
 
+cppcmake_module_add(strategy/core)
+
 cppcmake_module_add(stockChart/core)
 cppcmake_module_add(stockChart/render)
 cppcmake_module_add(studio/core)
@@ -89,3 +91,4 @@ endif()
 
 cppcmake_module_add(apps/chart)
 cppcmake_module_add(apps/studio)
+cppcmake_module_add(apps/strategy)

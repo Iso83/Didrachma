@@ -1,0 +1,84 @@
+{
+  "formatVersion": 3,
+  "id": "cli-subject-peer",
+  "displayName": "CLI subject and peer fixture",
+  "version": 1,
+  "description": "Deterministic CLI fixture",
+  "direction": "long",
+  "primarySeriesId": "subject-10m",
+  "series": [
+    {
+      "id": "subject-10m",
+      "providerId": "fixture",
+      "instrument": {
+        "kind": "subject"
+      },
+      "timeframe": {
+        "quantity": 10,
+        "unit": "minute"
+      },
+      "displayName": "Subject \u2014 10 minutes"
+    },
+    {
+      "id": "peer-daily",
+      "providerId": "fixture",
+      "instrument": {
+        "kind": "fixed",
+        "symbol": "XLK"
+      },
+      "timeframe": {
+        "quantity": 1,
+        "unit": "day"
+      },
+      "displayName": "Fixed XLK \u2014 1 day"
+    }
+  ],
+  "indicators": [],
+  "entry": {
+    "condition": {
+      "id": "entry-all",
+      "kind": "all",
+      "children": [
+        {
+          "id": "subject-ready",
+          "kind": "marketComparison",
+          "predicate": {
+            "seriesId": "subject-10m",
+            "field": "close",
+            "comparison": "greater",
+            "value": 100
+          }
+        },
+        {
+          "id": "peer-ready",
+          "kind": "marketComparison",
+          "predicate": {
+            "seriesId": "peer-daily",
+            "field": "close",
+            "comparison": "greater",
+            "value": 50
+          }
+        }
+      ]
+    },
+    "order": {
+      "kind": "nextBarOpen"
+    }
+  },
+  "stopLoss": {
+    "kind": "absolute",
+    "value": 1,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
+  "target": {
+    "kind": "absolute",
+    "value": 1000,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
+  "exits": [],
+  "runtimeRules": []
+}

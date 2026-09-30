@@ -1,0 +1,68 @@
+{
+  "formatVersion": 3,
+  "id": "cli-no-entry",
+  "displayName": "CLI no-entry fixture",
+  "version": 1,
+  "description": "No entry is a successful result",
+  "direction": "long",
+  "primarySeriesId": "subject-10m",
+  "series": [
+    {
+      "id": "subject-10m",
+      "providerId": "fixture",
+      "instrument": {
+        "kind": "subject"
+      },
+      "timeframe": {
+        "quantity": 10,
+        "unit": "minute"
+      },
+      "displayName": "Subject \u2014 10 minutes"
+    },
+    {
+      "id": "peer-daily",
+      "providerId": "fixture",
+      "instrument": {
+        "kind": "fixed",
+        "symbol": "XLK"
+      },
+      "timeframe": {
+        "quantity": 1,
+        "unit": "day"
+      },
+      "displayName": "Fixed XLK \u2014 1 day"
+    }
+  ],
+  "indicators": [],
+  "entry": {
+    "condition": {
+      "id": "never",
+      "kind": "marketComparison",
+      "predicate": {
+        "seriesId": "subject-10m",
+        "field": "close",
+        "comparison": "greater",
+        "value": 200
+      }
+    },
+    "order": {
+      "kind": "nextBarOpen"
+    }
+  },
+  "stopLoss": {
+    "kind": "absolute",
+    "value": 95,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
+  "target": {
+    "kind": "absolute",
+    "value": 105,
+    "indicatorId": "",
+    "outputId": "",
+    "offset": 0
+  },
+  "exits": [],
+  "runtimeRules": []
+}

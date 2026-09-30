@@ -69,6 +69,7 @@ bool Bars::apply(const BarUpdate& update) {
     } else
         m_dirty_range = dirty;
     ++m_revision;
+    m_last_revision = RevisionAudit{m_key, m_revision, update.kind, dirty};
     return true;
 }
 } // namespace Didrachma::Market::Core::Series

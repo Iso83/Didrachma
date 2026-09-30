@@ -115,3 +115,14 @@ cppcmake_test_add(
     SOURCES
         tests/Condition.cpp
 )
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_Pattern
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "analysis/core"
+    SOURCES
+        tests/Pattern.cpp
+)

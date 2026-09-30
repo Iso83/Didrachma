@@ -1,6 +1,7 @@
 #include "TestAssert.h"
 
 #include <Didrachma/analysis/adapters/talib/Analyzer.h>
+#include <Didrachma/analysis/core/condition/Pattern.h>
 #include <Didrachma/studio/core/Events.h>
 #include <algorithm>
 #include <cmath>
@@ -169,6 +170,52 @@ int test_talib_moving_average_instances_produce_metadata_driven_events() {
     return 0;
 }
 
+int test_closed_talib_doji_produces_event_independent_of_marker_visibility() {
+    StockChart::Core::Document document{"chart", {"test", "ABC", {1, Market::Core::Time::Unit::Day}}, {at(0), at(100)}};
+    const auto instance = document.add_indicator("cdldoji", {});
+    document.set_indicator_name(instance, "Configured Doji");
+    const auto layer = document.add_layer(StockChart::Core::LayerKind::Marker, {{instance, "value"}},
+                                          {{1, 0.8F, 0.2F, 1}, false, 2, 0.2F});
+    std::vector<Market::Core::Series::Bar> bars;
+    for (int index = 0; index < 20; ++index)
+        bars.push_back({at(index), at(index + 1), 8, 13, 7, 12, 100, Market::Core::Series::BarState::Closed});
+    bars.back().open = bars.back().close = 10;
+
+    Analysis::Adapters::TaLib::Analyzer analyzer;
+    document.find_indicator(instance)->cached_result =
+        analyzer.calculate({document.find_indicator(instance)->instance, bars, 1, std::nullopt}).result;
+    CPPTEST_ASSERT(document.find_indicator(instance)->cached_result->state ==
+                   Analysis::Core::Indicator::CalculationState::Ready);
+    CPPTEST_ASSERT(document.find_indicator(instance)->cached_result->outputs[0].samples.back().value != 0);
+    CPPTEST_ASSERT(document.find_indicator(instance)->cached_result->outputs[0].samples.back().timestamp ==
+                   bars.back().open_time);
+    Studio::Core::EventList events;
+    Studio::Core::ConditionBindingRegistry registry;
+    const auto catalog = analyzer.catalog();
+    const auto doji = std::ranges::find(catalog, std::string{"cdldoji"}, &Analysis::Core::Indicator::Definition::id);
+    CPPTEST_ASSERT(doji != catalog.end());
+    const auto extracted = extract_pattern_events(*doji, document.find_indicator(instance)->instance,
+                                                  *document.find_indicator(instance)->cached_result, bars,
+                                                  {document.id(), "Configured Doji", document.series()});
+    CPPTEST_ASSERT(std::ranges::find(extracted, bars.back().open_time, &Event::start) != extracted.end());
+    registry.evaluate(document, bars, events, catalog);
+    const auto occurrence = std::ranges::find(events.events(), bars.back().open_time, &Event::start);
+    CPPTEST_ASSERT(occurrence != events.events().end());
+    const auto& event = *occurrence;
+    CPPTEST_ASSERT(event.source_definition_id == "cdldoji" && event.source_instance_id == instance);
+    CPPTEST_ASSERT(event.source_name == "Configured Doji" && event.start == bars.back().open_time);
+    CPPTEST_ASSERT(event.direction == Direction::Neutral && event.evidence.at("raw_pattern_value") != 0);
+    const auto event_id = event.id;
+    const auto event_count = events.events().size();
+
+    auto hidden = document.find_layer(layer)->style;
+    hidden.visible = true;
+    document.set_layer_style(layer, hidden);
+    registry.evaluate(document, bars, events, catalog);
+    CPPTEST_ASSERT(events.events().size() == event_count && events.find(event_id));
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_sort_filter_duplicate_suppression_and_span_pairing);
     CPPTEST_RUN(test_event_navigation_and_missing_history_request);
@@ -176,5 +223,6 @@ int main() {
     CPPTEST_RUN(test_chart_and_indicator_scoped_replacement);
     CPPTEST_RUN(test_configured_instances_drive_events_independently_of_layers);
     CPPTEST_RUN(test_talib_moving_average_instances_produce_metadata_driven_events);
+    CPPTEST_RUN(test_closed_talib_doji_produces_event_independent_of_marker_visibility);
     return 0;
 }

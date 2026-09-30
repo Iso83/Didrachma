@@ -1,6 +1,7 @@
 #include "TestAssert.h"
 
 #include <Didrachma/stockChart/render/State.h>
+#include <tuple>
 
 using namespace Didrachma::StockChart::Render;
 using namespace Didrachma::Market::Core;
@@ -101,6 +102,50 @@ int test_indicator_geometry_and_hit_testing() {
     return 0;
 }
 
+int test_marker_placement_collision_selection_and_clipping() {
+    namespace Condition = Didrachma::Analysis::Core::Condition;
+    CoordinateMapper mapper{{at(0), at(30)}, {0, 20}, {300, 200}};
+    std::vector<Series::Bar> bars{{at(10), at(11), 10, 14, 8, 12, 10}, {at(20), at(21), 12, 15, 9, 10, 20}};
+    const Series::Key key{"fixture", "ABC", {1, Time::Unit::Minute}};
+    std::vector<Condition::Event> events;
+    for (const auto& [id, instance, direction] :
+         std::vector<std::tuple<std::string, std::string, Condition::Direction>>{
+             {"up", "one", Condition::Direction::Upward},
+             {"down", "two", Condition::Direction::Downward},
+             {"neutral", "one", Condition::Direction::Neutral}}) {
+        Condition::Event event{id, "pattern", key, at(10)};
+        event.chart_id = "chart";
+        event.source_instance_id = instance;
+        event.direction = direction;
+        events.push_back(std::move(event));
+    }
+    Condition::Event outside{"outside", "pattern", key, at(40)};
+    outside.chart_id = "chart";
+    outside.source_instance_id = "one";
+    events.push_back(std::move(outside));
+
+    const auto first = build_markers(events, bars, mapper, {1, 1, 0, 1}, "chart", "one", "neutral");
+    const auto second = build_markers(events, bars, mapper, {1, 0, 0, 1}, "chart", "two");
+    CPPTEST_ASSERT(first.glyphs.size() == 2 && second.glyphs.size() == 1);
+    CPPTEST_ASSERT(first.glyphs[0].center.y > mapper.map(at(10), 8).y);
+    CPPTEST_ASSERT(second.glyphs[0].center.y < mapper.map(at(10), 14).y);
+    CPPTEST_ASSERT(first.glyphs[1].selected && first.glyphs[1].size == 9);
+    CPPTEST_ASSERT(first.glyphs[1].center.y != second.glyphs[0].center.y);
+    return 0;
+}
+
+int test_event_selection_line_leaves_candle_gap() {
+    CoordinateMapper mapper{{at(0), at(30)}, {0, 20}, {300, 200}};
+    const std::vector<Series::Bar> bars{{at(10), at(11), 10, 14, 8, 12, 10}};
+    const auto segments = build_event_selection_line(at(10), bars, mapper, 300);
+    CPPTEST_ASSERT(segments.size() == 2);
+    CPPTEST_ASSERT(segments[0].first.y == 0 && segments[0].second.y < mapper.map(at(10), 14).y);
+    CPPTEST_ASSERT(segments[1].first.y > mapper.map(at(10), 8).y && segments[1].second.y == 300);
+    CPPTEST_ASSERT(segments[0].first.x == mapper.map(at(10), 12).x);
+    CPPTEST_ASSERT(build_event_selection_line(at(20), bars, mapper, 300).empty());
+    return 0;
+}
+
 int test_time_zoom_and_visible_price_fit() {
     std::vector<Series::Bar> bars{{at(10), at(11), 10, 14, 8, 12, 10}, {at(20), at(21), 12, 20, 11, 18, 20}};
     const auto price = fit_price_range(bars);
@@ -155,6 +200,8 @@ int main() {
     CPPTEST_RUN(test_coordinates_use_local_origin_and_round_trip);
     CPPTEST_RUN(test_clipping_and_geometry);
     CPPTEST_RUN(test_indicator_geometry_and_hit_testing);
+    CPPTEST_RUN(test_marker_placement_collision_selection_and_clipping);
+    CPPTEST_RUN(test_event_selection_line_leaves_candle_gap);
     CPPTEST_RUN(test_linked_panes_and_shared_hover_mapping);
     CPPTEST_RUN(test_time_zoom_and_visible_price_fit);
     CPPTEST_RUN(test_dirty_cache_and_scheduler);

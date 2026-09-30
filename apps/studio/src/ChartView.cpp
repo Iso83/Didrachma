@@ -1,5 +1,6 @@
 #include "ChartView.h"
 
+#include <Didrachma/stockChart/core/PatternProjection.h>
 #include <algorithm>
 #include <functional>
 #include <limits>
@@ -87,11 +88,17 @@ void update_geometry(ChartView& view, StockChart::Core::Document& document,
         view.separate_range = {0.0, 1.0};
         view.canvas->set_geometry({});
         view.canvas->set_indicators({}, {});
+        view.canvas->set_markers({});
         return;
     }
     view.has_visible_geometry = true;
 
+    static const auto definitions = analyzer.catalog();
     for (const auto& item : document.indicators()) {
+        const auto definition =
+            std::ranges::find(definitions, item.instance.definition_id, &Analysis::Core::Indicator::Definition::id);
+        if (definition != definitions.end())
+            StockChart::Core::reconcile_pattern_projection(document, *definition, item.instance.id);
         const auto outcome = analyzer.calculate({item.instance, view.bars, 1, {}});
         document.find_indicator(item.instance.id)->cached_result = outcome.result;
     }
@@ -100,6 +107,7 @@ void update_geometry(ChartView& view, StockChart::Core::Document& document,
 
     std::vector<Intern::LineOutput> line_outputs;
     std::vector<Intern::BandOutput> band_outputs;
+    std::vector<std::pair<const StockChart::Core::Layer*, const StockChart::Core::IndicatorEntry*>> marker_outputs;
     const auto& selected_standalone = document.selected_standalone_indicator_id();
     for (const auto& layer : document.layers()) {
         if (!layer.style.visible || layer.outputs.empty())
@@ -121,7 +129,8 @@ void update_geometry(ChartView& view, StockChart::Core::Document& document,
             const auto* lower = Intern::output(*entry, layer.outputs[1].output_id);
             if (upper && lower)
                 band_outputs.push_back({*upper, *lower, layer.style});
-        }
+        } else if (layer.kind == StockChart::Core::LayerKind::Marker && events)
+            marker_outputs.emplace_back(&layer, entry);
     }
     const auto in_view = [&](const Intern::Sample& sample) {
         return sample.timestamp >= view.visible_range.begin && sample.timestamp < view.visible_range.end;
@@ -164,6 +173,7 @@ void update_geometry(ChartView& view, StockChart::Core::Document& document,
         view.has_visible_geometry = false;
         view.canvas->set_geometry({});
         view.canvas->set_indicators({}, {});
+        view.canvas->set_markers({});
         return;
     }
     const Size price_size{view.plot_width, pane_content_height(panes.price_content_height)};
@@ -200,5 +210,15 @@ void update_geometry(ChartView& view, StockChart::Core::Document& document,
         bands.push_back({build_band(band.upper, band.lower, mapper), band.style.color, band.style.line_width,
                          band.style.band_fill_opacity});
     view.canvas->set_indicators(std::move(lines), std::move(bands));
+    std::vector<StyledMarkerGeometry> markers;
+    if (events) {
+        const auto selected = document.selected_event_id()
+                                  ? std::optional<std::string_view>{*document.selected_event_id()}
+                                  : std::nullopt;
+        for (const auto& [layer, entry] : marker_outputs)
+            markers.push_back(build_markers(events->events(), visible, mapper, layer->style.color, document.id(),
+                                            entry->instance.id, selected));
+    }
+    view.canvas->set_markers(std::move(markers));
 }
 } // namespace Didrachma::Apps::Studio

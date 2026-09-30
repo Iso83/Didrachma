@@ -74,11 +74,26 @@ bool Workspace::set_polling(const std::string& chart_id, bool enabled) {
     return true;
 }
 
+bool Workspace::request_history(const std::string& chart_id, Market::Core::Time::Range range) {
+    const auto found = m_history_requests.find(chart_id);
+    if (found == m_history_requests.end() || range.empty())
+        return false;
+
+    found->second.range.begin = std::min(found->second.range.begin, range.begin);
+    found->second.range.end = std::max(found->second.range.end, range.end);
+    return true;
+}
+
 StockChart::Core::Document* Workspace::selected_chart() {
     if (!m_selected_chart_id)
         return nullptr;
 
     const auto found = std::ranges::find(m_documents, *m_selected_chart_id, &StockChart::Core::Document::id);
+    return found == m_documents.end() ? nullptr : &*found;
+}
+
+StockChart::Core::Document* Workspace::find_chart(const Market::Core::Series::Key& key) {
+    const auto found = std::ranges::find(m_documents, key, &StockChart::Core::Document::series);
     return found == m_documents.end() ? nullptr : &*found;
 }
 

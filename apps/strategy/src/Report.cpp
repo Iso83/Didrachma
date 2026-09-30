@@ -1,0 +1,368 @@
+#include "Report.h"
+
+#include "UtcTime.h"
+
+#include <Didrachma/strategy/core/Repository.h>
+#include <nlohmann/json.hpp>
+
+namespace Didrachma::Apps::Strategy {
+namespace {
+using namespace Didrachma::Strategy::Core;
+
+const char* state_name(RunState value) {
+    switch (value) {
+        case RunState::WaitingForEntry:
+            return "waiting_for_entry";
+        case RunState::EntryArmed:
+            return "entry_armed";
+        case RunState::Running:
+            return "running";
+        case RunState::Exited:
+            return "exited";
+        case RunState::Stopped:
+            return "stopped";
+        case RunState::Error:
+            return "error";
+    }
+
+    return "error";
+}
+
+const char* event_name(StrategyEventKind value) {
+    switch (value) {
+        case StrategyEventKind::EntryArmed:
+            return "entry_armed";
+        case StrategyEventKind::EntryFilled:
+            return "entry_filled";
+        case StrategyEventKind::EntryExpired:
+            return "entry_expired";
+        case StrategyEventKind::StopAdjusted:
+            return "stop_adjusted";
+        case StrategyEventKind::TargetAdjusted:
+            return "target_adjusted";
+        case StrategyEventKind::ExitArmed:
+            return "exit_armed";
+        case StrategyEventKind::ExitTriggered:
+            return "exit_triggered";
+        case StrategyEventKind::RunStopped:
+            return "run_stopped";
+        case StrategyEventKind::Error:
+            return "error";
+    }
+
+    return "error";
+}
+
+const char* exit_name(ExitReason value) {
+    switch (value) {
+        case ExitReason::None:
+            return "none";
+        case ExitReason::Condition:
+            return "condition";
+        case ExitReason::RuntimeRule:
+            return "runtime_rule";
+        case ExitReason::StopLoss:
+            return "stop_loss";
+        case ExitReason::Target:
+            return "target";
+        case ExitReason::UserStop:
+            return "user_stop";
+        case ExitReason::EndOfRange:
+            return "end_of_range";
+        case ExitReason::Error:
+            return "error";
+    }
+
+    return "error";
+}
+
+const char* readiness_name(Readiness value) {
+    switch (value) {
+        case Readiness::Loading:
+            return "loading";
+        case Readiness::Ready:
+            return "ready";
+        case Readiness::Stale:
+            return "stale";
+        case Readiness::InsufficientHistory:
+            return "insufficient_history";
+        case Readiness::ProviderError:
+            return "provider_error";
+        case Readiness::CalculationError:
+            return "calculation_error";
+    }
+
+    return "provider_error";
+}
+
+const char* orchestration_name(BacktestStatus value) {
+    switch (value) {
+        case BacktestStatus::Preparing:
+            return "preparing";
+        case BacktestStatus::Ready:
+            return "ready";
+        case BacktestStatus::Executing:
+            return "executing";
+        case BacktestStatus::Completed:
+            return "completed";
+        case BacktestStatus::Failed:
+            return "failed";
+        case BacktestStatus::Cancelled:
+            return "cancelled";
+    }
+    return "failed";
+}
+
+const char* outcome_name(BacktestResultStatus value) {
+    switch (value) {
+        case BacktestResultStatus::NoSignal:
+            return "no_signal";
+        case BacktestResultStatus::SignalNotFilled:
+            return "signal_not_filled";
+        case BacktestResultStatus::OpenPositionClosedAtEnd:
+            return "open_position_closed_at_end";
+        case BacktestResultStatus::Exited:
+            return "exited";
+        case BacktestResultStatus::Failed:
+            return "failed";
+    }
+    return "failed";
+}
+
+const char* entry_name(EntryStatus value) {
+    switch (value) {
+        case EntryStatus::NoSignal:
+            return "no_signal";
+        case EntryStatus::AwaitingFill:
+            return "awaiting_fill";
+        case EntryStatus::Expired:
+            return "expired";
+        case EntryStatus::Filled:
+            return "filled";
+    }
+    return "no_signal";
+}
+
+const char* truth_name(Truth value) {
+    switch (value) {
+        case Truth::False:
+            return "false";
+        case Truth::True:
+            return "true";
+        case Truth::Unknown:
+            return "unknown";
+    }
+
+    return "unknown";
+}
+
+const char* projection_name(ProjectionKind value) {
+    switch (value) {
+        case ProjectionKind::EntryMarker:
+            return "entry_marker";
+        case ProjectionKind::ExitMarker:
+            return "exit_marker";
+        case ProjectionKind::EntryPrice:
+            return "entry_price";
+        case ProjectionKind::StopPrice:
+            return "stop_price";
+        case ProjectionKind::TargetPrice:
+            return "target_price";
+    }
+
+    return "entry_marker";
+}
+
+std::string frame_name(Market::Core::Time::Frame frame);
+
+nlohmann::json evidence_json(const Evidence& evidence) {
+    const auto source_key = evidence.source_key
+                                ? nlohmann::json{{"providerId", evidence.source_key->provider},
+                                                 {"instrument", evidence.source_key->instrument},
+                                                 {"timeframe", frame_name(evidence.source_key->timeframe)}}
+                                : nlohmann::json{};
+    return {{"conditionId", evidence.condition_id},
+            {"conditionPath", evidence.condition_path},
+            {"truth", truth_name(evidence.truth)},
+            {"value", evidence.value},
+            {"sourceTime", evidence.source_time ? nlohmann::json(format_utc(*evidence.source_time)) : nlohmann::json{}},
+            {"bindingId", evidence.binding_id},
+            {"sourceKey", source_key},
+            {"sourceTimeframe",
+             evidence.source_timeframe ? nlohmann::json(frame_name(*evidence.source_timeframe)) : nlohmann::json{}},
+            {"sequenceStep", evidence.sequence_step},
+            {"sequenceSize", evidence.sequence_size},
+            {"detail", evidence.detail}};
+}
+
+std::string frame_name(Market::Core::Time::Frame frame) {
+    const auto unit = frame.unit == Market::Core::Time::Unit::Minute ? "minute"
+                      : frame.unit == Market::Core::Time::Unit::Hour ? "hour"
+                                                                     : "day";
+    return std::to_string(frame.quantity) + " " + unit + (frame.quantity == 1 ? "" : "s");
+}
+} // namespace
+
+nlohmann::json make_report(const BacktestOutcome& outcome, const ReportContext& context) {
+    const auto& definition = outcome.request.strategy_snapshot;
+    const auto serialized_request = nlohmann::json::parse(serialize(outcome.request));
+    nlohmann::json inputs = nlohmann::json::array();
+    for (const auto& item : outcome.inputs)
+        inputs.push_back({{"bindingId", item.series.binding_id},
+                          {"providerId", item.series.key.provider},
+                          {"instrument", item.series.key.instrument},
+                          {"timeframe", frame_name(item.series.key.timeframe)},
+                          {"readiness", readiness_name(item.state.readiness)},
+                          {"detail", item.state.detail},
+                          {"availableHistory", item.state.available_history},
+                          {"requiredHistory", item.state.required_history}});
+
+    const auto event_json = [](const StrategyEvent& event) {
+        nlohmann::json evidence = nlohmann::json::array();
+        for (const auto& item : event.evidence)
+            evidence.push_back(evidence_json(item));
+        return nlohmann::json{{"kind", event_name(event.kind)},
+                              {"oldState", state_name(event.old_state)},
+                              {"newState", state_name(event.new_state)},
+                              {"evaluationTime", format_utc(event.evaluation_time)},
+                              {"effectiveTime", format_utc(event.effective_time)},
+                              {"triggerIds", event.trigger_ids},
+                              {"oldValue", event.old_value},
+                              {"newValue", event.new_value},
+                              {"detail", event.detail},
+                              {"evidence", std::move(evidence)}};
+    };
+    nlohmann::json results = nlohmann::json::array();
+    for (const auto& occurrence : outcome.occurrences) {
+        const auto& result = occurrence.result;
+        nlohmann::json events = nlohmann::json::array();
+        for (const auto& event : result.events)
+            events.push_back(event_json(event));
+        nlohmann::json evaluations = nlohmann::json::array();
+        for (const auto& evaluation : result.evaluations) {
+            nlohmann::json evidence = nlohmann::json::array();
+            for (const auto& item : evaluation.evidence)
+                evidence.push_back(evidence_json(item));
+            evaluations.push_back({{"occurrenceId", occurrence.id},
+                                   {"time", format_utc(evaluation.time)},
+                                   {"truth", truth_name(evaluation.truth)},
+                                   {"evidence", std::move(evidence)}});
+        }
+        nlohmann::json markers = nlohmann::json::array(), segments = nlohmann::json::array();
+        for (const auto& marker : result.projection.markers)
+            markers.push_back(
+                {{"kind", projection_name(marker.kind)}, {"time", format_utc(marker.time)}, {"price", marker.price}});
+        for (const auto& segment : result.projection.segments)
+            segments.push_back({{"kind", projection_name(segment.kind)},
+                                {"begin", format_utc(segment.begin)},
+                                {"end", format_utc(segment.end)},
+                                {"price", segment.price}});
+        results.push_back(
+            {{"id", occurrence.id},
+             {"status", outcome_name(occurrence.status)},
+             {"state", state_name(result.state)},
+             {"entryStatus", entry_name(result.entry_status)},
+             {"exitReason", exit_name(result.exit_reason)},
+             {"entryTime", result.entry_time ? nlohmann::json(format_utc(*result.entry_time)) : nlohmann::json{}},
+             {"exitTime", result.exit_time ? nlohmann::json(format_utc(*result.exit_time)) : nlohmann::json{}},
+             {"entryPrice", result.entry_price},
+             {"exitPrice", result.exit_price},
+             {"currentPrice", result.current_price},
+             {"unrealizedProfitLoss", result.unrealized_profit_loss},
+             {"unrealizedReturnPercentage", result.unrealized_return_percentage},
+             {"grossProfitLoss", result.gross_profit_loss},
+             {"netProfitLoss", result.net_profit_loss},
+             {"returnPercentage", result.return_percentage},
+             {"durationSeconds", result.duration.count()},
+             {"elapsedSeconds", result.elapsed.count()},
+             {"closedBarCount", result.closed_bar_count},
+             {"maximumFavorableExcursion", result.maximum_favorable_excursion},
+             {"maximumAdverseExcursion", result.maximum_adverse_excursion},
+             {"triggerCounts", result.trigger_counts},
+             {"ambiguousFill", result.ambiguous_fill},
+             {"warnings", result.warnings},
+             {"events", std::move(events)},
+             {"evaluations", std::move(evaluations)},
+             {"projection", {{"markers", std::move(markers)}, {"segments", std::move(segments)}}}});
+    }
+    nlohmann::json audit_events = nlohmann::json::array();
+    for (const auto& audit : outcome.audit_events)
+        audit_events.push_back({{"occurrenceId", audit.occurrence_id}, {"event", event_json(audit.event)}});
+    const auto milliseconds = [](const std::optional<std::chrono::nanoseconds>& duration) -> nlohmann::json {
+        return duration ? nlohmann::json(std::chrono::duration<double, std::milli>(*duration).count())
+                        : nlohmann::json{};
+    };
+    nlohmann::json evaluations = nlohmann::json::array();
+    for (const auto& item : outcome.evaluations) {
+        nlohmann::json evidence = nlohmann::json::array();
+        for (const auto& value : item.evaluation.evidence)
+            evidence.push_back(evidence_json(value));
+
+        evaluations.push_back({{"occurrenceId", item.occurrence_id},
+                               {"time", format_utc(item.evaluation.time)},
+                               {"truth", truth_name(item.evaluation.truth)},
+                               {"evidence", std::move(evidence)}});
+    }
+    return {{"reportFormatVersion", 7},
+            {"backtestRequest", serialized_request},
+            {"strategy",
+             {{"id", definition.id},
+              {"version", definition.version},
+              {"sourceFile", context.strategy_file},
+              {"snapshot", serialized_request.at("strategy")}}},
+            {"request",
+             {{"provider", outcome.request.provider.id},
+              {"providerConfiguration", outcome.request.provider.values},
+              {"subject", outcome.request.subject_symbol},
+              {"from", format_utc(outcome.request.from)},
+              {"throughInclusive", format_utc(outcome.request.through)},
+              {"fillModelVersion", outcome.request.fill_model_version},
+              {"effectiveWarmupBegin",
+               outcome.warmup_begin ? nlohmann::json(format_utc(*outcome.warmup_begin)) : nlohmann::json{}}}},
+            {"execution",
+             {{"quantity", outcome.request.execution.quantity},
+              {"startingCapital", outcome.request.execution.starting_capital},
+              {"fixedCostPerFill", outcome.request.execution.fixed_per_fill},
+              {"percentageCostPerFill", outcome.request.execution.percentage_per_fill},
+              {"slippagePercentage", outcome.request.execution.slippage_percentage},
+              {"overridden", context.costs_overridden}}},
+            {"inputs", std::move(inputs)},
+            {"orchestrationStatus", orchestration_name(outcome.status)},
+            {"outcomeStatus", outcome_name(outcome.result_status)},
+            {"summary",
+             {{"signalCount", outcome.summary.signal_count},
+              {"filledCount", outcome.summary.filled_count},
+              {"closedCount", outcome.summary.closed_count},
+              {"targetCount", outcome.summary.target_count},
+              {"stopCount", outcome.summary.stop_count},
+              {"endOfRangeCount", outcome.summary.end_of_range_count},
+              {"grossProfitLoss", outcome.summary.gross_profit_loss},
+              {"costs", outcome.summary.costs},
+              {"netProfitLoss", outcome.summary.net_profit_loss}}},
+            {"timings",
+             {{"dataPreparationMilliseconds", milliseconds(outcome.timings.data_preparation)},
+              {"indicatorCalculationMilliseconds", milliseconds(outcome.timings.indicator_calculation)},
+              {"strategyExecutionMilliseconds", milliseconds(outcome.timings.strategy_execution)},
+              {"totalRunnerMilliseconds", milliseconds(outcome.timings.total)}}},
+            {"auditEvents", std::move(audit_events)},
+            {"evaluations", std::move(evaluations)},
+            {"results", std::move(results)}};
+}
+
+void print_summary(const nlohmann::json& report, bool verbose, std::ostream& output) {
+    output << "Strategy: " << report["strategy"]["id"].get<std::string>() << '\n';
+    for (const auto& result : report["results"]) {
+        output << "Occurrence " << result["id"] << ": " << result["status"].get<std::string>() << " ("
+               << result["exitReason"].get<std::string>() << ")\n";
+        if (verbose)
+            for (const auto& event : result["events"])
+                output << "Event " << event["kind"].get<std::string>() << " @ "
+                       << event["effectiveTime"].get<std::string>() << ": " << event["detail"].get<std::string>()
+                       << '\n';
+    }
+    output << "Signals: " << report["summary"]["signalCount"] << "  Filled: " << report["summary"]["filledCount"]
+           << "  Closed: " << report["summary"]["closedCount"] << "\nNet P/L: " << report["summary"]["netProfitLoss"]
+           << '\n';
+}
+
+} // namespace Didrachma::Apps::Strategy

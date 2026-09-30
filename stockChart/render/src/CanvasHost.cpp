@@ -41,6 +41,22 @@ void band_segment(Point upper_first, Point upper_second, Point lower_first, Poin
             viewport_height);
     }
 }
+
+void marker(const MarkerGlyph& glyph, int viewport_height) {
+    using Direction = Analysis::Core::Condition::Direction;
+    if (glyph.direction == Direction::Neutral) {
+        rectangle({{glyph.center.x - glyph.size / 2, glyph.center.y - glyph.size / 2},
+                   {glyph.center.x + glyph.size / 2, glyph.center.y + glyph.size / 2}},
+                  viewport_height);
+        return;
+    }
+    const auto tip_y = glyph.direction == Direction::Upward ? glyph.center.y - glyph.size : glyph.center.y + glyph.size;
+    const auto base_y =
+        glyph.direction == Direction::Upward ? glyph.center.y + glyph.size : glyph.center.y - glyph.size;
+    segment({glyph.center.x, tip_y}, {glyph.center.x - glyph.size, base_y}, viewport_height);
+    segment({glyph.center.x, tip_y}, {glyph.center.x + glyph.size, base_y}, viewport_height);
+    segment({glyph.center.x - glyph.size, base_y}, {glyph.center.x + glyph.size, base_y}, viewport_height);
+}
 } // namespace Intern
 
 class StockChartDrawContext::Resources {
@@ -144,6 +160,11 @@ void StockChartDrawContext::draw(ScopeCanvas::Engine::Render::Window::Viewport*)
             Intern::segment(line.geometry.points[index - 1], line.geometry.points[index], viewport_height,
                             static_cast<int>(std::round(line.width)));
     }
+    for (const auto& markers : m_markers) {
+        Intern::color(markers.color.red, markers.color.green, markers.color.blue, markers.color.alpha);
+        for (const auto& glyph : markers.glyphs)
+            Intern::marker(glyph, viewport_height);
+    }
 
     glDisable(GL_SCISSOR_TEST);
     auto elements = m_candles.wicks.size() + m_candles.bodies.size() * 2 + m_candles.volume.size() * 2;
@@ -151,6 +172,8 @@ void StockChartDrawContext::draw(ScopeCanvas::Engine::Render::Window::Viewport*)
         elements += line.geometry.points.size();
     for (const auto& band : m_bands)
         elements += band.geometry.upper.size() + band.geometry.lower.size();
+    for (const auto& markers : m_markers)
+        elements += markers.glyphs.size() * 3;
     m_counters->uploaded_elements += elements;
     m_counters->uploaded_bytes += elements * sizeof(Point);
     ++m_counters->layer_rebuilds;

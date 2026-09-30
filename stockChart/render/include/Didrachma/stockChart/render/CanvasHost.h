@@ -12,6 +12,7 @@ class StockChartDrawContext final : public ScopeCanvas::Engine::Render::Window::
     CandleGeometry m_candles;
     std::vector<StyledLineGeometry> m_lines;
     std::vector<StyledBandGeometry> m_bands;
+    std::vector<StyledMarkerGeometry> m_markers;
     PaneLayout m_panes{};
     InvalidationState* m_invalidation{};
     RenderCounters* m_counters{};
@@ -30,6 +31,10 @@ public:
     void set_indicators(std::vector<StyledLineGeometry> lines, std::vector<StyledBandGeometry> bands) {
         m_lines = std::move(lines);
         m_bands = std::move(bands);
+        m_invalidation->invalidate(DirtyReason::Data);
+    }
+    void set_markers(std::vector<StyledMarkerGeometry> markers) {
+        m_markers = std::move(markers);
         m_invalidation->invalidate(DirtyReason::Data);
     }
     void set_pane_layout(PaneLayout panes) {
@@ -77,6 +82,9 @@ public:
     }
     void set_indicators(std::vector<StyledLineGeometry> lines, std::vector<StyledBandGeometry> bands) {
         m_context.set_indicators(std::move(lines), std::move(bands));
+    }
+    void set_markers(std::vector<StyledMarkerGeometry> markers) {
+        m_context.set_markers(std::move(markers));
     }
     void set_pane_layout(PaneLayout panes) {
         m_context.set_pane_layout(panes);

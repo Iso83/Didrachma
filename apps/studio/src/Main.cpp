@@ -7,12 +7,16 @@
 #include "Performance.h"
 #include "ProfilePanel.h"
 #include "RuntimeOptions.h"
+#include "StrategyPanel.h"
 #include "WorkspaceRuntime.h"
 #include "YahooChartDialog.h"
 
 #include <Didrachma/analysis/adapters/talib/Analyzer.h>
 #include <Didrachma/analysis/core/indicator/Validation.h>
+#include <Didrachma/market/providers/yahoo/Interval.h>
+#include <Didrachma/market/providers/yahoo/Provider.h>
 #include <Didrachma/stockChart/render/CanvasHost.h>
+#include <Didrachma/studio/core/HistoricalBacktests.h>
 #include <Didrachma/studio/core/Workspace.h>
 #include <GLFW/glfw3.h>
 #include <ScopeCanvas/integration/imgui/DisplayScale.h>
@@ -27,6 +31,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <memory>
+#include <set>
 #include <string_view>
 #include <vector>
 
@@ -40,6 +45,7 @@ using Didrachma::Apps::Studio::update_geometry;
 namespace ChartCore = Didrachma::StockChart::Core;
 namespace Indicator = Didrachma::Analysis::Core::Indicator;
 namespace Studio = Didrachma::Studio::Core;
+namespace Strategy = Didrachma::Strategy;
 using Timestamp = Didrachma::Market::Core::Time::UtcTimestamp;
 
 struct PlatformPointer {
@@ -89,6 +95,16 @@ int main(int argc, char** argv) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     auto& imgui_io = ImGui::GetIO();
+    static const ImWchar studio_glyph_ranges[]{0x0020, 0x00FF, 0x2014, 0x2014, 0};
+#ifdef _WIN32
+    imgui_io.FontDefault =
+        imgui_io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0F, nullptr, studio_glyph_ranges);
+#else
+    imgui_io.FontDefault = imgui_io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16.0F,
+                                                              nullptr, studio_glyph_ranges);
+#endif
+    if (!imgui_io.FontDefault)
+        imgui_io.FontDefault = imgui_io.Fonts->AddFontDefault();
     imgui_io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
     imgui_io.ConfigViewportsNoDecoration = false;
     imgui_io.ConfigWindowsMoveFromTitleBarOnly = true;
@@ -112,8 +128,28 @@ int main(int argc, char** argv) {
     Studio::WorkspaceRepository repository{"didrachma-workspace.json"};
     Didrachma::Apps::Studio::YahooHistoryLoader yahoo_history;
     Studio::EventList analysis_events;
+    Studio::Strategies strategies{analyzer};
+    Studio::HistoricalBacktests historical_backtests{[](const Strategy::Core::BacktestRequest& request,
+                                                        const std::function<bool()>& cancelled,
+                                                        const Strategy::Core::BacktestProgressObserver& progress) {
+        Didrachma::Analysis::Adapters::TaLib::Analyzer worker_analyzer;
+        Didrachma::Market::Providers::Yahoo::Provider provider;
+        std::vector<Strategy::Core::BacktestSourceCapability> capabilities;
+        for (const auto& interval : Didrachma::Market::Providers::Yahoo::intervals())
+            capabilities.push_back({interval.frame, interval.source_frame, interval.history_reach});
+        const auto now = std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now());
+        return Strategy::Core::BacktestRunner{worker_analyzer}.run(request, provider, capabilities, now, cancelled,
+                                                                   progress);
+    }};
+    Didrachma::Apps::Studio::StrategyPanelState strategy_panel;
+    strategy_panel.historical_backtests = &historical_backtests;
+    std::set<std::string> highlighted_event_ids;
     using namespace Didrachma::StockChart::Render;
     const auto bars = Didrachma::Apps::Studio::demo_bars();
+    const std::filesystem::path strategy_session_path{"didrachma-strategy-session.json"};
+    if (std::filesystem::exists(strategy_session_path))
+        if (const auto error = strategies.restore_session(strategy_session_path, catalog))
+            status = "Strategy session could not be restored: " + *error;
 
     if (std::filesystem::exists("didrachma-workspace.json")) {
         auto loaded = repository.load();
@@ -137,6 +173,8 @@ int main(int argc, char** argv) {
     bool show_events = true;
     bool show_yahoo_chart = false;
     bool show_render_diagnostics = runtime_options.render_diagnostics;
+    bool show_strategies = true;
+    bool show_strategy_monitor = true;
 
     while (!glfwWindowShouldClose(window)) {
         glfwWaitEventsTimeout(1.0 / 30.0);
@@ -144,7 +182,30 @@ int main(int argc, char** argv) {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        yahoo_history.apply_if_ready(workspace, views, analyzer, analysis_events, status);
+        historical_backtests.apply_pending();
+        if (yahoo_history.apply_if_ready(workspace, views, analyzer, analysis_events, status))
+            for (auto& view : views) {
+                const auto document = std::ranges::find(workspace.documents(), view.id, &ChartCore::Document::id);
+                if (document == workspace.documents().end() || view.history_range.empty())
+                    continue;
+
+                const auto navigation =
+                    strategy_panel.historical_charts.history_loaded(*document, view.visible_range, view.history_range);
+                if (navigation.applied) {
+                    view.visible_range = navigation.visible_range;
+                    update_geometry(view, *document, analyzer, &analysis_events);
+                }
+            }
+        strategies.update(
+            [&](std::string_view chart_id) -> std::span<const Bar> {
+                const auto found = std::ranges::find(views, chart_id, &ChartView::id);
+                return found == views.end() ? std::span<const Bar>{} : std::span<const Bar>{found->bars};
+            },
+            [&](std::string_view chart_id) -> Didrachma::StockChart::Core::Document* {
+                const auto found =
+                    std::ranges::find(workspace.documents(), chart_id, &Didrachma::StockChart::Core::Document::id);
+                return found == workspace.documents().end() ? nullptr : &*found;
+            });
 
         if (ImGui::BeginMainMenuBar()) {
             if (ImGui::BeginMenu("Chart")) {
@@ -160,6 +221,8 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem("Indicator Instances", nullptr, &show_instances);
                 ImGui::MenuItem("Profiles", nullptr, &show_profiles);
                 ImGui::MenuItem("Analysis Events", nullptr, &show_events);
+                ImGui::MenuItem("Strategies", nullptr, &show_strategies);
+                ImGui::MenuItem("Strategy monitor", nullptr, &show_strategy_monitor);
                 ImGui::MenuItem("Render diagnostics", nullptr, &show_render_diagnostics);
                 if (ImGui::BeginMenu("StockCharts")) {
                     for (auto& view : views)
@@ -177,6 +240,96 @@ int main(int argc, char** argv) {
             Didrachma::Apps::Studio::open_yahoo_chart(workspace, views, yahoo_history, *request);
         }
 
+        if (show_strategies) {
+            const auto open_strategy_chart =
+                [&](const Didrachma::Market::Core::Series::Key& key) -> ChartCore::Document& {
+                const auto existing = std::ranges::find(workspace.documents(), key, &ChartCore::Document::series);
+                if (existing != workspace.documents().end()) {
+                    workspace.select_chart(existing->id());
+                    return *existing;
+                }
+
+                auto& document = workspace.create_chart(key, range, range);
+                views.push_back({document.id(), std::make_unique<CanvasHost>(), {640, 420}, range});
+                views.back().history_range = range;
+                views.back().canvas->resize(views.back().size);
+                workspace.select_chart(document.id());
+                if (key.provider == "yahoo")
+                    yahoo_history.start(document.id(), {key, range, true});
+                else if (key.provider == "demo") {
+                    views.back().bars.assign(bars.begin(), bars.end());
+                    update_geometry(views.back(), document, analyzer, &analysis_events);
+                }
+                return document;
+            };
+
+            const auto find_strategy_chart = [&](std::string_view id) -> ChartCore::Document* {
+                const auto found = std::ranges::find(workspace.documents(), id, &ChartCore::Document::id);
+                return found == workspace.documents().end() ? nullptr : &*found;
+            };
+
+            Didrachma::Apps::Studio::draw_strategies_panel(strategies, strategy_panel, catalog, open_strategy_chart,
+                                                           find_strategy_chart);
+        }
+        if (show_strategy_monitor)
+            Didrachma::Apps::Studio::draw_strategy_monitor(
+                strategies, strategy_panel,
+                [&](const Studio::HistoricalBacktest& run, const Studio::HistoricalTimelineItem& item) {
+                    auto selected = strategy_panel.historical_charts.select(workspace, run, item);
+                    if (!selected.document)
+                        return;
+
+                    auto view = std::ranges::find(views, selected.document->id(), &ChartView::id);
+                    if (view == views.end()) {
+                        views.push_back({selected.document->id(),
+                                         std::make_unique<CanvasHost>(),
+                                         {640, 420},
+                                         selected.document->visible_range()});
+                        view = std::prev(views.end());
+                        view->history_range = workspace.history_request(selected.document->id())->range;
+                        view->canvas->resize(view->size);
+                    }
+                    if (view->bars.empty() && !selected.retained_bars.empty())
+                        view->bars.assign(selected.retained_bars.begin(), selected.retained_bars.end());
+                    view->open = true;
+                    const auto navigation = strategy_panel.historical_charts.navigate(
+                        *selected.document, view->visible_range, view->history_range, selected.goto_time);
+                    if (navigation.applied)
+                        view->visible_range = navigation.visible_range;
+                    update_geometry(*view, *selected.document, analyzer, &analysis_events);
+                    if (selected.missing_history || navigation.missing_history) {
+                        status = "Additional history requested for selected historical event";
+                        if (navigation.missing_history) {
+                            const auto step = minimum_zoom_duration(selected.document->series().timeframe);
+                            workspace.request_history(selected.document->id(), {selected.goto_time - step * 100,
+                                                                                selected.goto_time + step * 101});
+                        }
+                        if (selected.document->series().provider == "yahoo") {
+                            const auto* request = workspace.history_request(selected.document->id());
+                            yahoo_history.start(selected.document->id(), {request->key, request->range,
+                                                                          workspace.polling(selected.document->id())});
+                        }
+                    }
+                },
+                [&](std::string_view chart_id, std::optional<Timestamp> timestamp) {
+                    auto document = std::ranges::find(workspace.documents(), chart_id, &ChartCore::Document::id);
+                    ChartCore::Document* selected = document == workspace.documents().end() ? nullptr : &*document;
+                    auto view = std::ranges::find(views, chart_id, &ChartView::id);
+                    if (!selected || view == views.end())
+                        return;
+
+                    if (document != workspace.documents().end())
+                        workspace.select_chart(document->id());
+                    view->open = true;
+                    if (timestamp) {
+                        selected->dispatch(ChartCore::SelectTimestamp{*timestamp});
+                        const auto half = (view->visible_range.end - view->visible_range.begin) / 2;
+                        view->visible_range = {*timestamp - half, *timestamp + half};
+                        selected->dispatch(ChartCore::NavigateViewport{view->visible_range});
+                        update_geometry(*view, *selected, analyzer, &analysis_events);
+                    }
+                });
+
         if (show_catalog) {
             ImGui::Begin("Indicator Catalog", &show_catalog);
             if (auto* document = workspace.selected_chart()) {
@@ -191,8 +344,6 @@ int main(int argc, char** argv) {
                         group = definition.group;
                         ImGui::SeparatorText(definition.group.c_str());
                     }
-                    const bool event_capability = definition.capability == Indicator::Capability::AnalysisEvent;
-                    ImGui::BeginDisabled(event_capability);
                     if (ImGui::Selectable(definition.display_name.c_str())) {
                         selected_instance = Didrachma::Apps::Studio::add_indicator(*document, definition);
                         std::snprintf(instance_name, sizeof(instance_name), "%s", definition.display_name.c_str());
@@ -200,9 +351,6 @@ int main(int argc, char** argv) {
                         if (view != views.end())
                             update_geometry(*view, *document, analyzer, &analysis_events);
                     }
-                    ImGui::EndDisabled();
-                    if (event_capability && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                        ImGui::SetTooltip("Analysis/event capability; not a continuous chart study");
                 }
             } else
                 ImGui::TextDisabled("Select a StockChart");
@@ -329,7 +477,7 @@ int main(int argc, char** argv) {
 
         if (show_events)
             if (const auto* selected = Didrachma::Apps::Studio::draw_event_panel(
-                    analysis_events, workspace.selected_chart(), &show_events)) {
+                    analysis_events, workspace.selected_chart(), highlighted_event_ids, &show_events)) {
                 if (auto* document = workspace.selected_chart()) {
                     const auto navigation = Studio::navigate_to_event(*document, *selected, range);
                     const auto view = std::ranges::find(views, document->id(), &ChartView::id);
@@ -347,15 +495,19 @@ int main(int argc, char** argv) {
         for (auto& view : views) {
             if (!view.open)
                 continue;
-            const auto document = std::ranges::find(workspace.documents(), view.id, &ChartCore::Document::id);
-            if (document == workspace.documents().end())
+
+            const auto manual = std::ranges::find(workspace.documents(), view.id, &ChartCore::Document::id);
+            auto* document = manual == workspace.documents().end() ? nullptr : &*manual;
+            if (!document)
                 continue;
+
             const std::string title =
                 document->series().instrument + " - " + timeframe_label(document->series().timeframe) + "###" + view.id;
             ImGui::SetNextWindowDockID(chart_dock, ImGuiCond_FirstUseEver);
             ImGui::Begin(title.c_str(), &view.open);
             if (ImGui::IsWindowFocused())
-                workspace.select_chart(view.id);
+                if (manual != workspace.documents().end())
+                    workspace.select_chart(view.id);
             if (show_render_diagnostics)
                 Didrachma::Apps::Studio::draw_performance(view.canvas->counters());
             constexpr float axis_height = 24.0F;
@@ -372,6 +524,58 @@ int main(int argc, char** argv) {
             ImGui::Image(static_cast<ImTextureID>(view.canvas->texture()), size, {0, 1}, {1, 0});
             const auto image_minimum = ImGui::GetItemRectMin();
             const auto image_maximum = ImGui::GetItemRectMax();
+            const auto historical_overlays = strategy_panel.historical_charts.overlays_for(view.id);
+            if (!historical_overlays.empty() && view.visible_range.end > view.visible_range.begin &&
+                view.price_range.maximum > view.price_range.minimum) {
+                const auto point = [&](Timestamp time, double price) {
+                    const auto x = static_cast<double>((time - view.visible_range.begin).count()) /
+                                   static_cast<double>((view.visible_range.end - view.visible_range.begin).count());
+                    const auto y =
+                        (view.price_range.maximum - price) / (view.price_range.maximum - view.price_range.minimum);
+                    return ImVec2{image_minimum.x + static_cast<float>(x) * view.plot_width,
+                                  image_minimum.y + static_cast<float>(view.panes.price_top) +
+                                      static_cast<float>(y) * view.panes.price_content_height};
+                };
+                auto* draw = ImGui::GetWindowDrawList();
+                draw->PushClipRect(
+                    {image_minimum.x, image_minimum.y + static_cast<float>(view.panes.price_top)},
+                    {image_minimum.x + static_cast<float>(view.plot_width),
+                     image_minimum.y + static_cast<float>(view.panes.price_top + view.panes.price_content_height)},
+                    true);
+                for (const auto* historical_overlay : historical_overlays) {
+                    if (historical_overlay->position_span) {
+                        const auto color =
+                            historical_overlay->profitable ? IM_COL32(60, 190, 105, 28) : IM_COL32(220, 70, 70, 28);
+                        draw->AddRectFilled(point(historical_overlay->position_span->begin, view.price_range.maximum),
+                                            point(historical_overlay->position_span->end, view.price_range.minimum),
+                                            color);
+                    }
+                    for (const auto& annotation : historical_overlay->annotations) {
+                        if (annotation.end < view.visible_range.begin || annotation.begin >= view.visible_range.end)
+                            continue;
+                        using Kind = Studio::StrategyOverlayAnnotationKind;
+                        if (annotation.kind == Kind::Stop || annotation.kind == Kind::Target) {
+                            const auto color =
+                                annotation.kind == Kind::Stop ? IM_COL32(235, 80, 80, 45) : IM_COL32(80, 210, 120, 45);
+                            draw->AddRectFilled(point(annotation.begin, annotation.price_maximum),
+                                                point(annotation.end, annotation.price_minimum), color);
+                            draw->AddText(point(annotation.begin, annotation.price),
+                                          annotation.kind == Kind::Stop ? IM_COL32(245, 125, 125, 230)
+                                                                        : IM_COL32(125, 235, 155, 230),
+                                          annotation.label.c_str());
+                            continue;
+                        }
+
+                        const auto center = point(annotation.begin, annotation.price);
+                        const auto color =
+                            annotation.kind == Kind::Entry ? IM_COL32(80, 210, 120, 255) : IM_COL32(235, 80, 80, 255);
+                        draw->AddTriangleFilled({center.x, center.y - 7}, {center.x - 6, center.y + 5},
+                                                {center.x + 6, center.y + 5}, color);
+                        draw->AddText({center.x + 8, center.y - 8}, color, annotation.label.c_str());
+                    }
+                }
+                draw->PopClipRect();
+            }
             const auto pointer = platform_pointer();
             if (pointer.detached && pointer.window &&
                 std::ranges::find(detached_chart_windows, pointer.window) == detached_chart_windows.end())
@@ -452,22 +656,65 @@ int main(int argc, char** argv) {
                 draw_list->AddLine({image_minimum.x, image_minimum.y + static_cast<float>(panes.separate_splitter_y)},
                                    {image_maximum.x, image_minimum.y + static_cast<float>(panes.separate_splitter_y)},
                                    IM_COL32(110, 120, 145, 255), 2.0F);
-            if (document->selected_event_id())
-                if (const auto* event = analysis_events.find(*document->selected_event_id())) {
-                    const auto duration = view.visible_range.end - view.visible_range.begin;
-                    const auto x_at = [&](Timestamp timestamp) {
-                        const auto offset = timestamp - view.visible_range.begin;
-                        return image_minimum.x + view.plot_width * static_cast<float>(offset.count()) /
-                                                     static_cast<float>(duration.count());
-                    };
-                    const auto first = x_at(event->start);
-                    if (event->end)
-                        draw_list->AddRectFilled({first, image_minimum.y}, {x_at(*event->end), image_maximum.y},
-                                                 IM_COL32(255, 195, 64, 35));
-                    else
-                        draw_list->AddLine({first, image_minimum.y}, {first, image_maximum.y},
-                                           IM_COL32(255, 195, 64, 255), 2.0F);
+            if (view.has_visible_geometry) {
+                const Size price_size{view.plot_width, pane_content_height(panes.price_content_height)};
+                const CoordinateMapper selection_mapper{view.visible_range, view.price_range, price_size,
+                                                        static_cast<float>(pane_content_top(panes.price_top))};
+                if (document->selected_timestamp())
+                    for (const auto& segment : build_event_selection_line(*document->selected_timestamp(), view.bars,
+                                                                          selection_mapper, size.y))
+                        draw_list->AddLine({image_minimum.x + segment.first.x, image_minimum.y + segment.first.y},
+                                           {image_minimum.x + segment.second.x, image_minimum.y + segment.second.y},
+                                           IM_COL32(255, 195, 64, 230), 2.0F);
+                for (const auto& event_id : highlighted_event_ids)
+                    if (const auto* event = analysis_events.find(event_id);
+                        event && event->chart_id == document->id()) {
+                        if (event->end) {
+                            const auto duration = view.visible_range.end - view.visible_range.begin;
+                            const auto x_at = [&](Timestamp timestamp) {
+                                const auto offset = timestamp - view.visible_range.begin;
+                                return image_minimum.x + view.plot_width * static_cast<float>(offset.count()) /
+                                                             static_cast<float>(duration.count());
+                            };
+                            draw_list->AddRectFilled({x_at(event->start), image_minimum.y},
+                                                     {x_at(*event->end), image_maximum.y}, IM_COL32(255, 195, 64, 35));
+                        } else
+                            for (const auto& segment :
+                                 build_event_selection_line(event->start, view.bars, selection_mapper, size.y))
+                                draw_list->AddLine(
+                                    {image_minimum.x + segment.first.x, image_minimum.y + segment.first.y},
+                                    {image_minimum.x + segment.second.x, image_minimum.y + segment.second.y},
+                                    IM_COL32(255, 195, 64, 255), 2.0F);
+                    }
+                for (const auto& run : strategies.runs()) {
+                    const auto primary = std::ranges::find(run.series, run.snapshot.definition().primary_series_id,
+                                                           &Studio::StrategySeriesStatus::binding_id);
+                    if (primary == run.series.end() || primary->chart_id != document->id())
+                        continue;
+
+                    for (const auto& segment : run.result.projection.segments) {
+                        const auto first = selection_mapper.map(segment.begin, segment.price);
+                        const auto last = selection_mapper.map(segment.end, segment.price);
+                        const auto color = segment.kind == Didrachma::Strategy::Core::ProjectionKind::StopPrice
+                                               ? IM_COL32(235, 80, 80, 255)
+                                           : segment.kind == Didrachma::Strategy::Core::ProjectionKind::TargetPrice
+                                               ? IM_COL32(80, 210, 120, 255)
+                                               : IM_COL32(100, 170, 255, 255);
+                        constexpr float dash = 7.0F;
+                        for (float x = first.x; x < last.x; x += dash * 2.0F)
+                            draw_list->AddLine({image_minimum.x + x, image_minimum.y + first.y},
+                                               {image_minimum.x + std::min(x + dash, last.x), image_minimum.y + last.y},
+                                               color, 1.5F);
+                    }
+                    for (const auto& marker : run.result.projection.markers) {
+                        const auto point = selection_mapper.map(marker.time, marker.price);
+                        const auto color = marker.kind == Didrachma::Strategy::Core::ProjectionKind::EntryMarker
+                                               ? IM_COL32(80, 210, 120, 255)
+                                               : IM_COL32(235, 80, 80, 255);
+                        draw_list->AddCircleFilled({image_minimum.x + point.x, image_minimum.y + point.y}, 5.0F, color);
+                    }
                 }
+            }
             Didrachma::Apps::Studio::draw_chart_axes(view, image_minimum, image_maximum);
             if (Didrachma::Apps::Studio::draw_standalone_indicator_tabs(view, *document, image_minimum))
                 update_geometry(view, *document, analyzer, &analysis_events);
@@ -486,8 +733,29 @@ int main(int argc, char** argv) {
                     const auto utc = *std::gmtime(&time);
                     char timestamp[32]{};
                     std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S UTC", &utc);
-                    ImGui::SetTooltip("%s\nO %.2f  H %.2f  L %.2f  C %.2f  V %.0f", timestamp, bar.open, bar.high,
-                                      bar.low, bar.close, bar.volume);
+                    ImGui::BeginTooltip();
+                    ImGui::Text("%s", timestamp);
+                    ImGui::Text("O %.2f  H %.2f  L %.2f  C %.2f  V %.0f", bar.open, bar.high, bar.low, bar.close,
+                                bar.volume);
+                    for (const auto& strategy_hover :
+                         strategy_panel.historical_charts.hover_values(view.id, bar.open_time)) {
+                        const auto& overlay = *strategy_hover.overlay;
+                        ImGui::Separator();
+                        ImGui::Text("%s — occurrence #%zu (id %llu)", overlay.strategy_name.c_str(),
+                                    overlay.occurrence_index + 1,
+                                    static_cast<unsigned long long>(overlay.occurrence_id));
+                        ImGui::Text("%s", overlay.direction == Strategy::Core::Direction::Long ? "Long" : "Short");
+                        ImGui::Text("Entry: %s at %.4f", Studio::format_utc(*overlay.entry_time).c_str(),
+                                    overlay.entry_price.value_or(0.0));
+                        ImGui::Text("Exit: %s at %.4f (%s)", Studio::format_utc(*overlay.exit_time).c_str(),
+                                    overlay.exit_price.value_or(0.0),
+                                    Studio::format_exit_reason(overlay.exit_reason).c_str());
+                        ImGui::Text("Gross/net P/L: %.2f / %.2f", overlay.gross_profit_loss, overlay.net_profit_loss);
+                        ImGui::Text("Stop/target: %s / %s",
+                                    strategy_hover.stop ? std::to_string(*strategy_hover.stop).c_str() : "—",
+                                    strategy_hover.target ? std::to_string(*strategy_hover.target).c_str() : "—");
+                    }
+                    ImGui::EndTooltip();
                 }
             }
             ImGui::End();
@@ -501,10 +769,18 @@ int main(int argc, char** argv) {
                 continue;
             }
 
+            if (strategies.chart_required(view->id)) {
+                (void)strategies.close_view(view->id);
+                ++view;
+                status = "Chart view hidden; strategy runtime remains active";
+                continue;
+            }
+
             const auto chart_id = view->id;
             yahoo_history.cancel(chart_id);
             analysis_events.clear_chart(chart_id);
             workspace.close_chart(chart_id);
+            strategy_panel.historical_charts.detach(chart_id);
             view = views.erase(view);
             selected_instance.clear();
             status = "Chart closed and runtime state released";
@@ -527,6 +803,8 @@ int main(int argc, char** argv) {
 
     if (const auto error = repository.save(workspace))
         std::fprintf(stderr, "Unable to persist Studio workspace: %s\n", error->message.c_str());
+    if (const auto error = strategies.save_session(strategy_session_path))
+        std::fprintf(stderr, "Unable to persist strategy session: %s\n", error->c_str());
 
     // Release canvas-owned GL resources while the context is still current, before the UI and window are destroyed.
     views.clear();

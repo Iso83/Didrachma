@@ -1,6 +1,7 @@
 #include "TestAssert.h"
 
 #include <Didrachma/stockChart/core/Document.h>
+#include <Didrachma/stockChart/core/PatternProjection.h>
 
 using namespace Didrachma::StockChart::Core;
 using namespace Didrachma::Market::Core;
@@ -98,11 +99,29 @@ int test_standalone_indicator_selection_tracks_instances() {
     return 0;
 }
 
+int test_pattern_projection_replaces_study_pane_with_one_price_marker() {
+    namespace Indicator = Didrachma::Analysis::Core::Indicator;
+    auto document = chart("chart");
+    const auto instance = document.add_indicator("cdldoji", {});
+    document.add_layer(LayerKind::Line, {{instance, "value"}}, {}, LayerPane::Separate);
+    Indicator::Definition definition{"cdldoji", "Doji", {}, {{"value", "Integer", Indicator::VisualKind::Marker}}};
+    definition.capability = Indicator::Capability::AnalysisEvent;
+
+    CPPTEST_ASSERT(reconcile_pattern_projection(document, definition, instance));
+    CPPTEST_ASSERT(document.layers().size() == 1);
+    CPPTEST_ASSERT(document.layers()[0].kind == LayerKind::Marker && document.layers()[0].pane == LayerPane::Price);
+    CPPTEST_ASSERT(document.layers()[0].outputs[0].instance_id == instance);
+    CPPTEST_ASSERT(!document.selected_standalone_indicator_id());
+    CPPTEST_ASSERT(!reconcile_pattern_projection(document, definition, instance));
+    return 0;
+}
+
 int main() {
     CPPTEST_RUN(test_chart_identity_state_and_isolation);
     CPPTEST_RUN(test_disable_retains_state_position_and_remove_cascades);
     CPPTEST_RUN(test_style_revision_and_navigation);
     CPPTEST_RUN(test_parameter_edit_and_reorder_are_chart_local);
     CPPTEST_RUN(test_standalone_indicator_selection_tracks_instances);
+    CPPTEST_RUN(test_pattern_projection_replaces_study_pane_with_one_price_marker);
     return 0;
 }

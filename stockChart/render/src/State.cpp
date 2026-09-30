@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <utility>
 
@@ -253,9 +254,76 @@ BandGeometry build_band(std::span<const Analysis::Core::Indicator::OutputSample>
     for (std::size_t index = 0; index < count; ++index) {
         if (upper[index].timestamp != lower[index].timestamp)
             continue;
+
         result.upper.push_back(mapper.map(upper[index].timestamp, upper[index].value));
         result.lower.push_back(mapper.map(lower[index].timestamp, lower[index].value));
     }
+
+    return result;
+}
+
+StyledMarkerGeometry build_markers(std::span<const Analysis::Core::Condition::Event> events,
+                                   std::span<const Market::Core::Series::Bar> bars, const CoordinateMapper& mapper,
+                                   Core::Color color, std::string_view chart_id, std::string_view source_instance_id,
+                                   std::optional<std::string_view> selected_event_id) {
+    StyledMarkerGeometry result{{}, color};
+    std::map<Market::Core::Time::UtcTimestamp, std::size_t> collisions;
+    const auto top = mapper.y_offset();
+    const auto bottom = top + static_cast<float>(mapper.size().height);
+    for (const auto& event : events) {
+        if (event.chart_id != chart_id)
+            continue;
+
+        const auto count = collisions[event.start]++;
+        if (event.source_instance_id != source_instance_id)
+            continue;
+
+        const auto bar = std::ranges::find(bars, event.start, &Market::Core::Series::Bar::open_time);
+        if (bar == bars.end())
+            continue;
+
+        const auto anchor_price = event.direction == Analysis::Core::Condition::Direction::Upward     ? bar->low
+                                  : event.direction == Analysis::Core::Condition::Direction::Downward ? bar->high
+                                                                                                      : bar->close;
+        auto point = mapper.map(event.start, anchor_price);
+        const auto outward = 8.0F + static_cast<float>(count) * 9.0F;
+        if (event.direction == Analysis::Core::Condition::Direction::Upward)
+            point.y += outward;
+        else if (event.direction == Analysis::Core::Condition::Direction::Downward)
+            point.y -= outward;
+        else
+            point.y -= outward;
+        if (point.x < 0.0F || point.x >= static_cast<float>(mapper.size().width) || point.y < top || point.y >= bottom)
+            continue;
+
+        const bool selected = selected_event_id && event.id == *selected_event_id;
+        result.glyphs.push_back({point, event.direction, selected ? 9.0F : 6.0F, selected});
+    }
+
+    return result;
+}
+
+std::vector<LineSegment> build_event_selection_line(Market::Core::Time::UtcTimestamp timestamp,
+                                                    std::span<const Market::Core::Series::Bar> bars,
+                                                    const CoordinateMapper& price_mapper, float canvas_height,
+                                                    float candle_padding) {
+    const auto bar = std::ranges::find(bars, timestamp, &Market::Core::Series::Bar::open_time);
+    if (bar == bars.end() || canvas_height <= 0.0F)
+        return {};
+
+    const auto high = price_mapper.map(timestamp, bar->high);
+    const auto low = price_mapper.map(timestamp, bar->low);
+    if (high.x < 0.0F || high.x >= static_cast<float>(price_mapper.size().width))
+        return {};
+
+    const auto gap_top = std::clamp(high.y - candle_padding, 0.0F, canvas_height);
+    const auto gap_bottom = std::clamp(low.y + candle_padding, 0.0F, canvas_height);
+    std::vector<LineSegment> result;
+    if (gap_top > 0.0F)
+        result.push_back({{high.x, 0.0F}, {high.x, gap_top}});
+    if (gap_bottom < canvas_height)
+        result.push_back({{high.x, gap_bottom}, {high.x, canvas_height}});
+
     return result;
 }
 

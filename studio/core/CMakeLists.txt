@@ -77,6 +77,7 @@ source_group(
 target_link_libraries(${MODULE_TARGET}
     PUBLIC
         ${PROJECT_NAME}::stockChart_core
+        ${PROJECT_NAME}::strategy_core
     PRIVATE
         ${JSON}
 )
@@ -122,4 +123,62 @@ cppcmake_test_add(
         tests/Events.cpp
     LINK_LIBRARIES
         ${PROJECT_NAME}_analysis_adapters_talib
+)
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_StrategyEditor
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "studio/core"
+    SOURCES
+        tests/StrategyEditor.cpp
+)
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_BacktestSetup
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "studio/core"
+    SOURCES
+        tests/BacktestSetup.cpp
+)
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_Strategies
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "studio/core"
+    SOURCES
+        tests/Strategies.cpp
+    LINK_LIBRARIES
+        ${PROJECT_NAME}::tests_common
+        ${PROJECT_NAME}_analysis_adapters_talib
+)
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_HistoricalBacktests
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "studio/core"
+    SOURCES
+        tests/HistoricalBacktests.cpp
+)
+
+cppcmake_test_add(
+    NAME
+        Test_${MODULE_TARGET}_HistoricalResultLifecycle
+    TARGET
+        ${MODULE_TARGET}
+    MODULE
+        "studio/core"
+    SOURCES
+        tests/HistoricalResultLifecycle.cpp
 )

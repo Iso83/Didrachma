@@ -140,10 +140,15 @@ int test_async_history_retries_and_publishes_at_frame_boundary() {
     StockChart::Core::Document document{"chart", key, {at(0), at(100)}};
     Studio::Core::Session session{provider, analyzer, std::move(document)};
     CPPTEST_ASSERT(session.load_history_async(3, std::chrono::milliseconds{1}));
-    for (int wait = 0; wait < 100 && session.status().history_attempts < 3; ++wait)
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{1};
+    auto status = session.status();
+    while (status.connection != Studio::Core::ConnectionState::Idle && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        status = session.status();
+    }
 
-    CPPTEST_ASSERT(session.status().history_attempts == 3);
+    CPPTEST_ASSERT(status.connection == Studio::Core::ConnectionState::Idle);
+    CPPTEST_ASSERT(status.history_attempts == 3);
     CPPTEST_ASSERT(session.apply_frame_updates().applied_updates == 1);
     CPPTEST_ASSERT(session.bars().bars().size() == 1);
     return 0;
